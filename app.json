@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "작업 일정 관리",
+    "slug": "work-schedule-manager",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "workschedule",
+    "userInterfaceStyle": "light",
+    "plugins": ["expo-router"],
+    "experiments": { "typedRoutes": true },
+    "web": { "bundler": "metro" },
+    "android": { "package": "com.schedule.workmanager" },
+    "ios": { "bundleIdentifier": "com.schedule.workmanager" }
+  }
+}
