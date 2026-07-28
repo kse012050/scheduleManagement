@@ -1,0 +1,10 @@
+project_id = "work-schedule-manager"
+
+[functions.create-worker]
+verify_jwt = false
+
+[functions.delete-worker]
+verify_jwt = false
+
+[functions.reset-worker-password]
+verify_jwt = false

@@ -4,7 +4,6 @@ export type User = {
   id: string;
   loginId: string;
   name: string;
-  password: string;
   role: Role;
   mustChangePassword: boolean;
   active: boolean;
@@ -32,4 +31,4 @@ export type Schedule = {
   createdAt: string;
 };
 
-export type AppData = { users: User[]; jobs: Job[]; schedules: Schedule[] };
+export type AppData = { jobs: Job[]; schedules: Schedule[] };
