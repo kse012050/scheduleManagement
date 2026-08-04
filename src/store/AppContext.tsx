@@ -1,15 +1,8 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { loginIdToEmail, normalizeLoginId, supabase } from '@/lib/supabase';
-import { AppData, Job, Role, Schedule, User } from '@/types';
+import { Job, Role, Schedule, User } from '@/types';
 
-const DATA_KEY = '@work-schedule/local-data/v2';
 const LOGIN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/;
-
-const initialData: AppData = {
-  jobs: [],
-  schedules: [],
-};
 
 type ProfileRow = {
   id: string;
@@ -18,6 +11,31 @@ type ProfileRow = {
   role: Role;
   must_change_password: boolean;
   is_active: boolean;
+  created_at: string;
+};
+
+type JobRow = {
+  id: string;
+  title: string;
+  description: string;
+  location: string;
+  created_by: string;
+  created_at: string;
+};
+
+type AssignmentRow = {
+  job_id: string;
+  worker_id: string;
+};
+
+type ScheduleRow = {
+  id: string;
+  job_id: string;
+  title: string;
+  start_date: string;
+  end_date: string;
+  note: string;
+  created_by: string;
   created_at: string;
 };
 
@@ -38,10 +56,18 @@ type ContextValue = {
   resetWorkerPassword: (
     workerId: string,
   ) => Promise<{ temporaryPassword: string | null; error: string | null }>;
-  addJob: (input: { title: string; description: string; location: string }) => Promise<void>;
-  setJobWorkers: (jobId: string, workerIds: string[]) => Promise<void>;
-  addSchedule: (input: Omit<Schedule, 'id' | 'createdAt' | 'createdBy'>) => Promise<void>;
-  deleteSchedule: (id: string) => Promise<void>;
+  addJob: (input: { title: string; description: string; location: string }) => Promise<string | null>;
+  updateJob: (
+    jobId: string,
+    input: { title: string; description: string; location: string },
+  ) => Promise<string | null>;
+  setJobWorkers: (jobId: string, workerIds: string[]) => Promise<string | null>;
+  addSchedule: (input: Omit<Schedule, 'id' | 'createdAt' | 'createdBy'>) => Promise<string | null>;
+  updateSchedule: (
+    scheduleId: string,
+    input: Omit<Schedule, 'id' | 'createdAt' | 'createdBy'>,
+  ) => Promise<string | null>;
+  deleteSchedule: (id: string) => Promise<string | null>;
   canManageSchedule: (schedule: Schedule) => boolean;
 };
 
@@ -77,8 +103,9 @@ const functionErrorMessage = async (
 
 export function AppProvider({ children }: React.PropsWithChildren) {
   const [ready, setReady] = useState(false);
-  const [data, setData] = useState<AppData>(initialData);
   const [users, setUsers] = useState<User[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
 
   const refreshProfiles = async (signedInUserId: string) => {
@@ -102,24 +129,65 @@ export function AppProvider({ children }: React.PropsWithChildren) {
     return null;
   };
 
+  const refreshWorkData = async () => {
+    const [jobsResult, assignmentsResult, schedulesResult] = await Promise.all([
+      supabase
+        .from('jobs')
+        .select('id, title, description, location, created_by, created_at')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('job_assignments')
+        .select('job_id, worker_id'),
+      supabase
+        .from('schedules')
+        .select('id, job_id, title, start_date, end_date, note, created_by, created_at')
+        .order('start_date', { ascending: true }),
+    ]);
+
+    const firstError =
+      jobsResult.error ?? assignmentsResult.error ?? schedulesResult.error;
+    if (firstError) {
+      setJobs([]);
+      setSchedules([]);
+      return firstError.message;
+    }
+
+    const assignmentRows = assignmentsResult.data as AssignmentRow[];
+    setJobs(
+      (jobsResult.data as JobRow[]).map((job) => ({
+        id: job.id,
+        title: job.title,
+        description: job.description,
+        location: job.location,
+        workerIds: assignmentRows
+          .filter((assignment) => assignment.job_id === job.id)
+          .map((assignment) => assignment.worker_id),
+        createdAt: job.created_at,
+        createdBy: job.created_by,
+      })),
+    );
+    setSchedules(
+      (schedulesResult.data as ScheduleRow[]).map((schedule) => ({
+        id: schedule.id,
+        jobId: schedule.job_id,
+        title: schedule.title,
+        startDate: schedule.start_date,
+        endDate: schedule.end_date,
+        note: schedule.note,
+        createdBy: schedule.created_by,
+        createdAt: schedule.created_at,
+      })),
+    );
+    return null;
+  };
+
   useEffect(() => {
     let mounted = true;
 
     const initialize = async () => {
-      const [savedData, sessionResult] = await Promise.all([
-        AsyncStorage.getItem(DATA_KEY),
-        supabase.auth.getSession(),
-      ]);
+      const sessionResult = await supabase.auth.getSession();
 
       if (!mounted) return;
-
-      if (savedData) {
-        try {
-          setData(JSON.parse(savedData));
-        } catch {
-          setData(initialData);
-        }
-      }
 
       const session = sessionResult.data.session;
       if (session) {
@@ -129,6 +197,8 @@ export function AppProvider({ children }: React.PropsWithChildren) {
           await supabase.auth.signOut();
           setAuthUserId(null);
           setUsers([]);
+        } else {
+          await refreshWorkData();
         }
       }
 
@@ -147,12 +217,19 @@ export function AppProvider({ children }: React.PropsWithChildren) {
       if (event === 'SIGNED_OUT' || !session) {
         setAuthUserId(null);
         setUsers([]);
+        setJobs([]);
+        setSchedules([]);
         return;
       }
 
       setAuthUserId(session.user.id);
       setTimeout(() => {
-        if (mounted) void refreshProfiles(session.user.id);
+        if (mounted) {
+          void Promise.all([
+            refreshProfiles(session.user.id),
+            refreshWorkData(),
+          ]);
+        }
       }, 0);
     });
 
@@ -162,11 +239,6 @@ export function AppProvider({ children }: React.PropsWithChildren) {
     };
   }, []);
 
-  const persist = async (next: AppData) => {
-    setData(next);
-    await AsyncStorage.setItem(DATA_KEY, JSON.stringify(next));
-  };
-
   const currentUser =
     users.find((user) => user.id === authUserId && user.active) ?? null;
 
@@ -175,8 +247,8 @@ export function AppProvider({ children }: React.PropsWithChildren) {
       ready,
       currentUser,
       users,
-      jobs: data.jobs,
-      schedules: data.schedules,
+      jobs,
+      schedules,
       login: async (loginId, password) => {
         const normalizedLoginId = normalizeLoginId(loginId);
 
@@ -205,6 +277,7 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         }
 
         setAuthUserId(authData.user.id);
+        await refreshWorkData();
         return null;
       },
       logout: async () => {
@@ -213,6 +286,8 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         } finally {
           setAuthUserId(null);
           setUsers([]);
+          setJobs([]);
+          setSchedules([]);
         }
       },
       changePassword: async (password) => {
@@ -316,17 +391,10 @@ export function AppProvider({ children }: React.PropsWithChildren) {
           );
         }
 
-        const nextData: AppData = {
-          ...data,
-          jobs: data.jobs.map((job) => ({
-            ...job,
-            workerIds: job.workerIds.filter((id) => id !== workerId),
-          })),
-        };
-        await persist(nextData);
         setUsers((previous) =>
           previous.filter((user) => user.id !== workerId),
         );
+        await refreshWorkData();
         return null;
       },
       resetWorkerPassword: async (workerId) => {
@@ -374,56 +442,145 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         return { temporaryPassword, error: null };
       },
       addJob: async (input) => {
-        if (!currentUser || currentUser.role !== 'admin') return;
-        const job: Job = {
-          id: `job-${Date.now()}`,
-          ...input,
-          workerIds: [],
-          createdAt: new Date().toISOString(),
-          createdBy: currentUser.id,
-        };
-        await persist({ ...data, jobs: [job, ...data.jobs] });
+        if (!currentUser) return '로그인이 필요합니다.';
+
+        const { error } = await supabase.from('jobs').insert({
+          title: input.title.trim(),
+          description: input.description.trim(),
+          location: input.location.trim(),
+          created_by: currentUser.id,
+        });
+        if (error) return '작업을 등록하지 못했습니다.';
+
+        await refreshWorkData();
+        return null;
+      },
+      updateJob: async (jobId, input) => {
+        const target = jobs.find((job) => job.id === jobId);
+        if (
+          !currentUser ||
+          !target ||
+          !(
+            currentUser.role === 'admin' ||
+            target.createdBy === currentUser.id
+          )
+        ) {
+          return '이 작업을 수정할 권한이 없습니다.';
+        }
+
+        const { error } = await supabase
+          .from('jobs')
+          .update({
+            title: input.title.trim(),
+            description: input.description.trim(),
+            location: input.location.trim(),
+          })
+          .eq('id', jobId);
+        if (error) return '작업을 수정하지 못했습니다.';
+
+        await refreshWorkData();
+        return null;
       },
       setJobWorkers: async (jobId, workerIds) => {
-        if (!currentUser || currentUser.role !== 'admin') return;
-        await persist({
-          ...data,
-          jobs: data.jobs.map((job) =>
-            job.id === jobId ? { ...job, workerIds } : job,
-          ),
-        });
+        if (!currentUser || currentUser.role !== 'admin') {
+          return '관리자만 작업자를 배정할 수 있습니다.';
+        }
+
+        const { error: deleteError } = await supabase
+          .from('job_assignments')
+          .delete()
+          .eq('job_id', jobId);
+        if (deleteError) return '기존 작업자 배정을 변경하지 못했습니다.';
+
+        if (workerIds.length) {
+          const { error: insertError } = await supabase
+            .from('job_assignments')
+            .insert(
+              workerIds.map((workerId) => ({
+                job_id: jobId,
+                worker_id: workerId,
+                assigned_by: currentUser.id,
+              })),
+            );
+          if (insertError) {
+            await refreshWorkData();
+            return '작업자를 배정하지 못했습니다.';
+          }
+        }
+
+        await refreshWorkData();
+        return null;
       },
       addSchedule: async (input) => {
-        if (!currentUser) return;
-        const schedule: Schedule = {
-          id: `schedule-${Date.now()}`,
-          ...input,
-          createdBy: currentUser.id,
-          createdAt: new Date().toISOString(),
-        };
-        await persist({
-          ...data,
-          schedules: [...data.schedules, schedule],
+        if (!currentUser) return '로그인이 필요합니다.';
+
+        const { error } = await supabase.from('schedules').insert({
+          job_id: input.jobId,
+          title: input.title.trim(),
+          start_date: input.startDate,
+          end_date: input.endDate,
+          note: input.note.trim(),
+          created_by: currentUser.id,
         });
+        if (error) return '일정을 등록하지 못했습니다.';
+
+        await refreshWorkData();
+        return null;
+      },
+      updateSchedule: async (scheduleId, input) => {
+        const target = schedules.find(
+          (schedule) => schedule.id === scheduleId,
+        );
+        if (
+          !currentUser ||
+          !target ||
+          !(
+            currentUser.role === 'admin' ||
+            target.createdBy === currentUser.id
+          )
+        ) {
+          return '이 일정을 수정할 권한이 없습니다.';
+        }
+
+        const { error } = await supabase
+          .from('schedules')
+          .update({
+            title: input.title.trim(),
+            start_date: input.startDate,
+            end_date: input.endDate,
+            note: input.note.trim(),
+          })
+          .eq('id', scheduleId);
+        if (error) return '일정을 수정하지 못했습니다.';
+
+        await refreshWorkData();
+        return null;
       },
       deleteSchedule: async (id) => {
-        const target = data.schedules.find((item) => item.id === id);
+        const target = schedules.find((item) => item.id === id);
         if (
           !target ||
           !(currentUser?.role === 'admin' || target.createdBy === currentUser?.id)
         ) {
-          return;
+          return '이 일정을 삭제할 권한이 없습니다.';
         }
-        await persist({
-          ...data,
-          schedules: data.schedules.filter((item) => item.id !== id),
-        });
+
+        const { error } = await supabase
+          .from('schedules')
+          .delete()
+          .eq('id', id);
+        if (error) return '일정을 삭제하지 못했습니다.';
+
+        setSchedules((previous) =>
+          previous.filter((schedule) => schedule.id !== id),
+        );
+        return null;
       },
       canManageSchedule: (schedule) =>
         currentUser?.role === 'admin' ||
         schedule.createdBy === currentUser?.id,
     }),
-    [ready, currentUser, users, data],
+    [ready, currentUser, users, jobs, schedules],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
