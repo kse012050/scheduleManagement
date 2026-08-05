@@ -10,6 +10,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { Button, Card, Empty, Field, ui } from '@/components/UI';
@@ -51,6 +52,14 @@ type ContactSelection = {
   target: 'create' | 'edit';
 };
 
+type WorkerSort = 'name' | 'workType' | 'recent';
+
+const workerSortOptions: { value: WorkerSort; label: string }[] = [
+  { value: 'name', label: '이름순' },
+  { value: 'workType', label: '작업 종류순' },
+  { value: 'recent', label: '최근 등록순' },
+];
+
 export default function Workers() {
   const {
     currentUser,
@@ -82,12 +91,62 @@ export default function Workers() {
   const [editPhone, setEditPhone] = useState('');
   const [editWorkTypeId, setEditWorkTypeId] = useState<number | null>(null);
   const [editBusy, setEditBusy] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterWorkTypeId, setFilterWorkTypeId] = useState<number | null>(null);
+  const [workerSort, setWorkerSort] = useState<WorkerSort>('name');
+  const [listOption, setListOption] = useState<'workType' | 'sort'>(
+    'workType',
+  );
+  const [listOptionOpen, setListOptionOpen] = useState(false);
 
   if (!currentUser || currentUser.role !== 'admin') {
     return <Redirect href="/(tabs)" />;
   }
 
   const workers = users.filter((user) => user.role === 'worker');
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const visibleWorkers = workers
+    .filter((worker) => {
+      if (filterWorkTypeId && worker.workTypeId !== filterWorkTypeId) {
+        return false;
+      }
+
+      if (!normalizedSearch) return true;
+      const phoneDigits = worker.phone?.replace(/[^0-9]/g, '') ?? '';
+      const searchDigits = normalizedSearch.replace(/[^0-9]/g, '');
+      return (
+        worker.name.toLowerCase().includes(normalizedSearch) ||
+        worker.loginId.toLowerCase().includes(normalizedSearch) ||
+        Boolean(searchDigits && phoneDigits.includes(searchDigits))
+      );
+    })
+    .sort((left, right) => {
+      if (workerSort === 'recent') {
+        return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+      }
+
+      if (workerSort === 'workType') {
+        const leftOrder =
+          workTypes.find((workType) => workType.id === left.workTypeId)
+            ?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder =
+          workTypes.find((workType) => workType.id === right.workTypeId)
+            ?.sortOrder ?? Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      }
+
+      return left.name.localeCompare(right.name, 'ko');
+    });
+  const selectedWorkTypeFilter = workTypes.find(
+    (workType) => workType.id === filterWorkTypeId,
+  );
+  const selectedSortLabel =
+    workerSortOptions.find((option) => option.value === workerSort)?.label ??
+    '이름순';
+
+  const closeListOptionAfterSelection = () => {
+    setListOptionOpen(false);
+  };
 
   const closeModal = () => {
     setOpen(false);
@@ -340,8 +399,69 @@ export default function Workers() {
           </Pressable>
         </View>
 
-        {workers.length ? (
-          workers.map((worker) => (
+        <View style={styles.listControls}>
+          <View style={styles.searchBox}>
+            <View style={styles.searchIcon}>
+              <View style={styles.searchIconCircle} />
+              <View style={styles.searchIconHandle} />
+            </View>
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="이름, 아이디, 전화번호 검색"
+              placeholderTextColor={colors.muted}
+              style={styles.searchInput}
+            />
+          </View>
+          <Pressable
+            onPress={() => {
+              setListOption('workType');
+              setListOptionOpen(true);
+            }}
+            style={({ pressed }) => [
+              styles.listOptionButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            {selectedWorkTypeFilter ? (
+              <View
+                style={[
+                  styles.filterColor,
+                  { backgroundColor: selectedWorkTypeFilter.colorHex },
+                ]}
+              />
+            ) : null}
+            <Text numberOfLines={1} style={styles.listOptionText}>
+              {selectedWorkTypeFilter?.name ?? '전체'}
+            </Text>
+            <View style={styles.optionChevron}>
+              <View style={styles.optionChevronGlyph} />
+            </View>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              setListOption('sort');
+              setListOptionOpen(true);
+            }}
+            style={({ pressed }) => [
+              styles.listOptionButton,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text numberOfLines={1} style={styles.listOptionText}>
+              {selectedSortLabel}
+            </Text>
+            <View style={styles.optionChevron}>
+              <View style={styles.optionChevronGlyph} />
+            </View>
+          </Pressable>
+        </View>
+        <Text style={styles.resultCount}>검색 결과 {visibleWorkers.length}명</Text>
+
+        {visibleWorkers.length ? (
+          visibleWorkers.map((worker) => (
             <Card key={worker.id} style={styles.worker}>
               <View
                 style={[
@@ -421,8 +541,16 @@ export default function Workers() {
           ))
         ) : (
           <Empty
-            title="등록된 작업자가 없습니다"
-            detail="작업자 계정을 추가해주세요."
+            title={
+              workers.length
+                ? '조건에 맞는 작업자가 없습니다'
+                : '등록된 작업자가 없습니다'
+            }
+            detail={
+              workers.length
+                ? '검색어나 작업 종류 필터를 변경해주세요.'
+                : '작업자 계정을 추가해주세요.'
+            }
           />
         )}
       </ScrollView>
@@ -769,6 +897,94 @@ export default function Workers() {
           </Card>
         </ScrollView>
       </Modal>
+
+      <Modal
+        visible={listOptionOpen}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setListOptionOpen(false)}
+      >
+        <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
+          <View style={[ui.row, { justifyContent: 'space-between' }]}>
+            <Text style={ui.title}>
+              {listOption === 'workType' ? '작업 종류 선택' : '정렬 선택'}
+            </Text>
+            <Pressable onPress={() => setListOptionOpen(false)}>
+              <Text style={styles.close}>닫기</Text>
+            </Pressable>
+          </View>
+
+          {listOption === 'workType' ? (
+            <Card style={styles.optionList}>
+              <Pressable
+                onPress={() => {
+                  setFilterWorkTypeId(null);
+                  closeListOptionAfterSelection();
+                }}
+                style={[
+                  styles.optionRow,
+                  filterWorkTypeId === null && styles.optionRowSelected,
+                ]}
+              >
+                <Text style={styles.optionRowText}>전체</Text>
+                {filterWorkTypeId === null ? (
+                  <Text style={styles.optionCheck}>✓</Text>
+                ) : null}
+              </Pressable>
+              {workTypes.map((workType) => (
+                <Pressable
+                  key={workType.id}
+                  onPress={() => {
+                    setFilterWorkTypeId(workType.id);
+                    closeListOptionAfterSelection();
+                  }}
+                  style={[
+                    styles.optionRow,
+                    filterWorkTypeId === workType.id &&
+                      styles.optionRowSelected,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.filterColor,
+                      { backgroundColor: workType.colorHex },
+                    ]}
+                  />
+                  <Text style={[styles.optionRowText, { flex: 1 }]}>
+                    {workType.name}
+                  </Text>
+                  {filterWorkTypeId === workType.id ? (
+                    <Text style={styles.optionCheck}>✓</Text>
+                  ) : null}
+                </Pressable>
+              ))}
+            </Card>
+          ) : (
+            <Card style={styles.optionList}>
+              {workerSortOptions.map((option) => (
+                <Pressable
+                  key={option.value}
+                  onPress={() => {
+                    setWorkerSort(option.value);
+                    closeListOptionAfterSelection();
+                  }}
+                  style={[
+                    styles.optionRow,
+                    workerSort === option.value && styles.optionRowSelected,
+                  ]}
+                >
+                  <Text style={[styles.optionRowText, { flex: 1 }]}>
+                    {option.label}
+                  </Text>
+                  {workerSort === option.value ? (
+                    <Text style={styles.optionCheck}>✓</Text>
+                  ) : null}
+                </Pressable>
+              ))}
+            </Card>
+          )}
+        </ScrollView>
+      </Modal>
     </>
   );
 }
@@ -781,6 +997,111 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   addText: { color: '#fff', fontWeight: '700' },
+  listControls: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 9,
+  },
+  searchBox: {
+    minWidth: 210,
+    flexGrow: 1,
+    flexBasis: 240,
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+  },
+  searchIcon: {
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchIconCircle: {
+    position: 'absolute',
+    left: 3,
+    top: 3,
+    width: 10,
+    height: 10,
+    borderWidth: 1.5,
+    borderColor: colors.muted,
+    borderRadius: 5,
+  },
+  searchIconHandle: {
+    position: 'absolute',
+    right: 2,
+    bottom: 4,
+    width: 7,
+    height: 1.5,
+    borderRadius: 1,
+    backgroundColor: colors.muted,
+    transform: [{ rotate: '45deg' }],
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.ink,
+    fontSize: 14,
+    paddingVertical: 0,
+  },
+  listOptionButton: {
+    minWidth: 128,
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+  },
+  listOptionText: {
+    color: colors.ink,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  optionChevron: {
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionChevronGlyph: {
+    width: 7,
+    height: 7,
+    borderRightWidth: 1.5,
+    borderBottomWidth: 1.5,
+    borderColor: colors.muted,
+    transform: [{ rotate: '45deg' }, { translateY: -1 }],
+  },
+  filterColor: {
+    width: 10,
+    height: 10,
+    flexShrink: 0,
+    borderRadius: 5,
+  },
+  resultCount: { color: colors.muted, fontSize: 12, marginTop: -3 },
+  optionList: { gap: 7 },
+  optionRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 11,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  optionRowSelected: { backgroundColor: colors.primarySoft },
+  optionRowText: { color: colors.ink, fontSize: 15, fontWeight: '700' },
+  optionCheck: { color: colors.primary, fontSize: 17, fontWeight: '800' },
   worker: { flexDirection: 'row', alignItems: 'center', gap: 13 },
   avatar: {
     width: 58,
