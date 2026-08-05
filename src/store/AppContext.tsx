@@ -269,6 +269,12 @@ export function AppProvider({ children }: React.PropsWithChildren) {
       }
 
       setAuthUserId(session.user.id);
+
+      // updateUser() emits USER_UPDATED before the profile flag is updated.
+      // Refreshing here can restore the stale must_change_password value and
+      // redirect the user back to the password-change screen.
+      if (event === 'USER_UPDATED') return;
+
       setTimeout(() => {
         if (mounted) {
           void Promise.all([
@@ -345,7 +351,9 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         const { error: passwordError } = await supabase.auth.updateUser({
           password,
         });
-        if (passwordError) return '비밀번호를 변경하지 못했습니다.';
+        if (passwordError) {
+          return `비밀번호를 변경하지 못했습니다. (${passwordError.message})`;
+        }
 
         const { error: profileError } = await supabase
           .from('profiles')
@@ -354,13 +362,9 @@ export function AppProvider({ children }: React.PropsWithChildren) {
 
         if (profileError) return '계정 상태를 업데이트하지 못했습니다.';
 
-        setUsers((previous) =>
-          previous.map((user) =>
-            user.id === currentUser.id
-              ? { ...user, mustChangePassword: false }
-              : user,
-          ),
-        );
+        const refreshError = await refreshProfiles(currentUser.id);
+        if (refreshError) return '변경된 계정 상태를 불러오지 못했습니다.';
+
         return null;
       },
       updateAdminPhone: async (phone) => {
