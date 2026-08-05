@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { loginIdToEmail, normalizeLoginId, supabase } from '@/lib/supabase';
-import { Job, Role, Schedule, User } from '@/types';
+import { Job, Role, Schedule, User, WorkType } from '@/types';
 
 const LOGIN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+const PHONE_PATTERN = /^01[016789][0-9]{7,8}$/;
 
 type ProfileRow = {
   id: string;
@@ -11,7 +12,18 @@ type ProfileRow = {
   role: Role;
   must_change_password: boolean;
   is_active: boolean;
+  phone: string | null;
+  work_type_id: number | null;
   created_at: string;
+};
+
+type WorkTypeRow = {
+  id: number;
+  name: string;
+  note: string | null;
+  color_hex: string;
+  sort_order: number;
+  is_active: boolean;
 };
 
 type JobRow = {
@@ -43,15 +55,23 @@ type ContextValue = {
   ready: boolean;
   currentUser: User | null;
   users: User[];
+  workTypes: WorkType[];
   jobs: Job[];
   schedules: Schedule[];
   login: (loginId: string, password: string) => Promise<string | null>;
   logout: () => Promise<void>;
   changePassword: (password: string) => Promise<string | null>;
+  updateAdminPhone: (phone: string) => Promise<string | null>;
   addWorker: (input: {
     loginId: string;
     name: string;
+    phone: string;
+    workTypeId: number;
   }) => Promise<{ temporaryPassword: string | null; error: string | null }>;
+  updateWorker: (
+    workerId: string,
+    input: { name: string; phone: string; workTypeId: number },
+  ) => Promise<string | null>;
   deleteWorker: (workerId: string) => Promise<string | null>;
   resetWorkerPassword: (
     workerId: string,
@@ -80,7 +100,18 @@ const mapProfile = (profile: ProfileRow): User => ({
   role: profile.role,
   mustChangePassword: profile.must_change_password,
   active: profile.is_active,
+  phone: profile.phone,
+  workTypeId: profile.work_type_id,
   createdAt: profile.created_at,
+});
+
+const mapWorkType = (workType: WorkTypeRow): WorkType => ({
+  id: workType.id,
+  name: workType.name,
+  note: workType.note,
+  colorHex: workType.color_hex,
+  sortOrder: workType.sort_order,
+  active: workType.is_active,
 });
 
 const functionErrorMessage = async (
@@ -104,23 +135,36 @@ const functionErrorMessage = async (
 export function AppProvider({ children }: React.PropsWithChildren) {
   const [ready, setReady] = useState(false);
   const [users, setUsers] = useState<User[]>([]);
+  const [workTypes, setWorkTypes] = useState<WorkType[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
 
   const refreshProfiles = async (signedInUserId: string) => {
-    const { data: profileRows, error } = await supabase
-      .from('profiles')
-      .select('id, login_id, name, role, must_change_password, is_active, created_at')
-      .order('created_at', { ascending: true });
+    const [profilesResult, workTypesResult] = await Promise.all([
+      supabase
+        .from('profiles')
+        .select(
+          'id, login_id, name, role, must_change_password, is_active, phone, work_type_id, created_at',
+        )
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('work_types')
+        .select('id, name, note, color_hex, sort_order, is_active')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true }),
+    ]);
 
+    const error = profilesResult.error ?? workTypesResult.error;
     if (error) {
       setUsers([]);
+      setWorkTypes([]);
       return error.message;
     }
 
-    const nextUsers = (profileRows as ProfileRow[]).map(mapProfile);
+    const nextUsers = (profilesResult.data as ProfileRow[]).map(mapProfile);
     setUsers(nextUsers);
+    setWorkTypes((workTypesResult.data as WorkTypeRow[]).map(mapWorkType));
 
     if (!nextUsers.some((user) => user.id === signedInUserId && user.active)) {
       return '사용할 수 없는 계정입니다.';
@@ -197,6 +241,7 @@ export function AppProvider({ children }: React.PropsWithChildren) {
           await supabase.auth.signOut();
           setAuthUserId(null);
           setUsers([]);
+          setWorkTypes([]);
         } else {
           await refreshWorkData();
         }
@@ -217,6 +262,7 @@ export function AppProvider({ children }: React.PropsWithChildren) {
       if (event === 'SIGNED_OUT' || !session) {
         setAuthUserId(null);
         setUsers([]);
+        setWorkTypes([]);
         setJobs([]);
         setSchedules([]);
         return;
@@ -247,6 +293,7 @@ export function AppProvider({ children }: React.PropsWithChildren) {
       ready,
       currentUser,
       users,
+      workTypes,
       jobs,
       schedules,
       login: async (loginId, password) => {
@@ -271,6 +318,7 @@ export function AppProvider({ children }: React.PropsWithChildren) {
           await supabase.auth.signOut();
           setAuthUserId(null);
           setUsers([]);
+          setWorkTypes([]);
           return profileError.includes('profiles')
             ? '계정 테이블이 준비되지 않았습니다. Supabase SQL을 먼저 실행해주세요.'
             : profileError;
@@ -286,6 +334,7 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         } finally {
           setAuthUserId(null);
           setUsers([]);
+          setWorkTypes([]);
           setJobs([]);
           setSchedules([]);
         }
@@ -314,7 +363,31 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         );
         return null;
       },
-      addWorker: async ({ loginId, name }) => {
+      updateAdminPhone: async (phone) => {
+        if (!currentUser || currentUser.role !== 'admin') {
+          return '관리자만 전화번호를 변경할 수 있습니다.';
+        }
+
+        const normalizedPhone = phone.replace(/[^0-9]/g, '');
+        if (!PHONE_PATTERN.test(normalizedPhone)) {
+          return '전화번호를 올바르게 입력해주세요.';
+        }
+
+        const { error: invokeError } = await supabase.functions.invoke(
+          'update-admin-phone',
+          { body: { phone: normalizedPhone } },
+        );
+        if (invokeError) {
+          return functionErrorMessage(
+            invokeError,
+            '전화번호를 변경하지 못했습니다.',
+          );
+        }
+
+        await refreshProfiles(currentUser.id);
+        return null;
+      },
+      addWorker: async ({ loginId, name, phone, workTypeId }) => {
         if (!currentUser || currentUser.role !== 'admin') {
           return {
             temporaryPassword: null,
@@ -338,11 +411,28 @@ export function AppProvider({ children }: React.PropsWithChildren) {
           };
         }
 
+        const normalizedPhone = phone.replace(/[^0-9]/g, '');
+        if (!PHONE_PATTERN.test(normalizedPhone)) {
+          return {
+            temporaryPassword: null,
+            error: '전화번호를 올바르게 입력해주세요.',
+          };
+        }
+
+        if (!workTypes.some((workType) => workType.id === workTypeId)) {
+          return {
+            temporaryPassword: null,
+            error: '작업 종류를 선택해주세요.',
+          };
+        }
+
         const { data: result, error: invokeError } =
           await supabase.functions.invoke('create-worker', {
             body: {
               loginId: normalizedLoginId,
               name: name.trim(),
+              phone: normalizedPhone,
+              workTypeId,
             },
           });
 
@@ -370,6 +460,47 @@ export function AppProvider({ children }: React.PropsWithChildren) {
 
         await refreshProfiles(currentUser.id);
         return { temporaryPassword, error: null };
+      },
+      updateWorker: async (workerId, { name, phone, workTypeId }) => {
+        if (!currentUser || currentUser.role !== 'admin') {
+          return '관리자만 작업자 정보를 변경할 수 있습니다.';
+        }
+
+        const normalizedName = name.trim();
+        if (!normalizedName || normalizedName.length > 50) {
+          return '이름은 1~50자로 입력해주세요.';
+        }
+
+        const normalizedPhone = phone.replace(/[^0-9]/g, '');
+        if (!PHONE_PATTERN.test(normalizedPhone)) {
+          return '전화번호를 올바르게 입력해주세요.';
+        }
+
+        if (!workTypes.some((workType) => workType.id === workTypeId)) {
+          return '작업 종류를 선택해주세요.';
+        }
+
+        const { error: invokeError } = await supabase.functions.invoke(
+          'update-worker',
+          {
+            body: {
+              workerId,
+              name: normalizedName,
+              phone: normalizedPhone,
+              workTypeId,
+            },
+          },
+        );
+
+        if (invokeError) {
+          return functionErrorMessage(
+            invokeError,
+            '작업자 정보를 변경하지 못했습니다.',
+          );
+        }
+
+        await refreshProfiles(currentUser.id);
+        return null;
       },
       deleteWorker: async (workerId) => {
         if (!currentUser || currentUser.role !== 'admin') {
@@ -580,7 +711,7 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         currentUser?.role === 'admin' ||
         schedule.createdBy === currentUser?.id,
     }),
-    [ready, currentUser, users, jobs, schedules],
+    [ready, currentUser, users, workTypes, jobs, schedules],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -1,5 +1,6 @@
 import { Redirect } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
+import * as Contacts from 'expo-contacts';
 import { useState } from 'react';
 import {
   Alert,
@@ -18,26 +19,69 @@ import { useApp } from '@/store/AppContext';
 type CreatedAccount = {
   loginId: string;
   name: string;
+  phone?: string;
+  workTypeName?: string;
   temporaryPassword: string;
+};
+
+const formatPhone = (value: string) => {
+  const digits = value.replace(/[^0-9]/g, '');
+  if (digits.length === 11) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+  }
+  if (digits.length === 10) {
+    return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  }
+  return value;
+};
+
+const normalizeContactPhone = (value: string) => {
+  let digits = value.replace(/[^0-9]/g, '');
+  if (digits.startsWith('0082')) {
+    digits = `0${digits.slice(4)}`;
+  } else if (digits.startsWith('82')) {
+    digits = `0${digits.slice(2)}`;
+  }
+  return digits;
+};
+
+type ContactSelection = {
+  name: string;
+  phones: string[];
+  target: 'create' | 'edit';
 };
 
 export default function Workers() {
   const {
     currentUser,
     users,
+    workTypes,
     jobs,
     addWorker,
+    updateWorker,
     deleteWorker,
     resetWorkerPassword,
   } = useApp();
   const [open, setOpen] = useState(false);
   const [loginId, setLoginId] = useState('');
   const [name, setName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [selectedWorkTypeId, setSelectedWorkTypeId] = useState<number | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
+  const [pickingContact, setPickingContact] = useState(false);
+  const [contactSelection, setContactSelection] =
+    useState<ContactSelection | null>(null);
   const [busyWorkerId, setBusyWorkerId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [createdAccount, setCreatedAccount] =
     useState<CreatedAccount | null>(null);
+  const [editingWorkerId, setEditingWorkerId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editWorkTypeId, setEditWorkTypeId] = useState<number | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
 
   if (!currentUser || currentUser.role !== 'admin') {
     return <Redirect href="/(tabs)" />;
@@ -49,8 +93,123 @@ export default function Workers() {
     setOpen(false);
     setLoginId('');
     setName('');
+    setPhone('');
+    setSelectedWorkTypeId(null);
+    setContactSelection(null);
     setCopied(false);
     setCreatedAccount(null);
+  };
+
+  const applyContact = (
+    contactName: string,
+    contactPhone: string,
+    target: 'create' | 'edit',
+  ) => {
+    if (target === 'edit') {
+      if (contactName) setEditName(contactName);
+      setEditPhone(contactPhone);
+    } else {
+      if (contactName) setName(contactName);
+      setPhone(contactPhone);
+    }
+    setContactSelection(null);
+  };
+
+  const pickContact = async (target: 'create' | 'edit') => {
+    if (Platform.OS === 'web' || pickingContact) return;
+
+    setPickingContact(true);
+    try {
+      if (Platform.OS === 'android') {
+        const permission = await Contacts.requestPermissionsAsync();
+        if (permission.status !== 'granted') {
+          Alert.alert(
+            '연락처 권한 필요',
+            '연락처에서 작업자를 선택하려면 연락처 접근 권한이 필요합니다.',
+          );
+          return;
+        }
+      }
+
+      const contact = await Contacts.presentContactPickerAsync();
+      if (!contact) return;
+
+      const contactName =
+        contact.name?.trim() ||
+        [contact.firstName, contact.middleName, contact.lastName]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+      const phones = Array.from(
+        new Set(
+          (contact.phoneNumbers ?? [])
+            .map((item) => normalizeContactPhone(item.number ?? ''))
+            .filter((number) => /^01[016789][0-9]{7,8}$/.test(number)),
+        ),
+      );
+
+      if (!phones.length) {
+        Alert.alert(
+          '휴대전화 번호 없음',
+          '선택한 연락처에 사용할 수 있는 휴대전화 번호가 없습니다.',
+        );
+        return;
+      }
+
+      if (phones.length === 1) {
+        applyContact(contactName, phones[0], target);
+        return;
+      }
+
+      setContactSelection({ name: contactName, phones, target });
+    } catch {
+      Alert.alert('연락처 선택 실패', '연락처를 불러오지 못했습니다.');
+    } finally {
+      setPickingContact(false);
+    }
+  };
+
+  const openEdit = (worker: (typeof workers)[number]) => {
+    setEditingWorkerId(worker.id);
+    setEditName(worker.name);
+    setEditPhone(worker.phone ?? '');
+    setEditWorkTypeId(worker.workTypeId);
+    setContactSelection(null);
+  };
+
+  const closeEdit = () => {
+    if (editBusy) return;
+    setEditingWorkerId(null);
+    setEditName('');
+    setEditPhone('');
+    setEditWorkTypeId(null);
+    setContactSelection(null);
+  };
+
+  const submitEdit = async () => {
+    if (!editingWorkerId || !editWorkTypeId) {
+      Alert.alert('확인', '작업 종류를 선택해주세요.');
+      return;
+    }
+
+    setEditBusy(true);
+    const error = await updateWorker(editingWorkerId, {
+      name: editName,
+      phone: editPhone,
+      workTypeId: editWorkTypeId,
+    });
+    setEditBusy(false);
+
+    if (error) {
+      Alert.alert('정보 변경 실패', error);
+      return;
+    }
+
+    setEditingWorkerId(null);
+    setEditName('');
+    setEditPhone('');
+    setEditWorkTypeId(null);
+    setContactSelection(null);
   };
 
   const copyTemporaryPassword = async () => {
@@ -65,12 +224,24 @@ export default function Workers() {
   };
 
   const submit = async () => {
-    if (!loginId.trim() || !name.trim()) {
-      return Alert.alert('확인', '이름과 로그인 아이디를 입력해주세요.');
+    if (!loginId.trim() || !name.trim() || !phone.trim()) {
+      return Alert.alert(
+        '확인',
+        '이름, 로그인 아이디, 전화번호를 입력해주세요.',
+      );
+    }
+
+    if (!selectedWorkTypeId) {
+      return Alert.alert('확인', '작업 종류를 선택해주세요.');
     }
 
     setBusy(true);
-    const result = await addWorker({ loginId, name });
+    const result = await addWorker({
+      loginId,
+      name,
+      phone,
+      workTypeId: selectedWorkTypeId,
+    });
     setBusy(false);
 
     if (result.error || !result.temporaryPassword) {
@@ -83,6 +254,10 @@ export default function Workers() {
     setCreatedAccount({
       loginId: loginId.trim().toLowerCase(),
       name: name.trim(),
+      phone: phone.replace(/[^0-9]/g, ''),
+      workTypeName: workTypes.find(
+        (workType) => workType.id === selectedWorkTypeId,
+      )?.name,
       temporaryPassword: result.temporaryPassword,
     });
     setCopied(false);
@@ -168,14 +343,29 @@ export default function Workers() {
         {workers.length ? (
           workers.map((worker) => (
             <Card key={worker.id} style={styles.worker}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>
-                  {worker.name.slice(0, 1)}
+              <View
+                style={[
+                  styles.avatar,
+                  {
+                    backgroundColor:
+                      workTypes.find(
+                        (workType) => workType.id === worker.workTypeId,
+                      )?.colorHex ?? colors.muted,
+                  },
+                ]}
+              >
+                <Text style={styles.workTypeAvatarText}>
+                  {workTypes.find(
+                    (workType) => workType.id === worker.workTypeId,
+                  )?.name ?? '미지정'}
                 </Text>
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.name}>{worker.name}</Text>
                 <Text style={styles.id}>@{worker.loginId}</Text>
+                {worker.phone ? (
+                  <Text style={styles.phone}>{formatPhone(worker.phone)}</Text>
+                ) : null}
               </View>
               <View style={{ alignItems: 'flex-end', gap: 7 }}>
                 <Text
@@ -192,6 +382,16 @@ export default function Workers() {
                   개 작업
                 </Text>
                 <View style={styles.actions}>
+                  <Pressable
+                    disabled={busyWorkerId === worker.id}
+                    onPress={() => openEdit(worker)}
+                    style={({ pressed }) => [
+                      styles.actionButton,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={styles.editText}>정보 변경</Text>
+                  </Pressable>
                   <Pressable
                     disabled={busyWorkerId === worker.id}
                     onPress={() => confirmReset(worker)}
@@ -255,6 +455,28 @@ export default function Workers() {
                     {createdAccount.loginId}
                   </Text>
                 </View>
+                {createdAccount.phone ? (
+                  <>
+                    <View style={styles.divider} />
+                    <View style={styles.resultRow}>
+                      <Text style={styles.resultLabel}>전화번호</Text>
+                      <Text style={styles.resultValue}>
+                        {formatPhone(createdAccount.phone)}
+                      </Text>
+                    </View>
+                  </>
+                ) : null}
+                {createdAccount.workTypeName ? (
+                  <>
+                    <View style={styles.divider} />
+                    <View style={styles.resultRow}>
+                      <Text style={styles.resultLabel}>작업 종류</Text>
+                      <Text style={styles.resultValue}>
+                        {createdAccount.workTypeName}
+                      </Text>
+                    </View>
+                  </>
+                ) : null}
                 <View style={styles.divider} />
                 <View style={styles.passwordBox}>
                   <Text style={styles.passwordLabel}>임시 비밀번호</Text>
@@ -290,8 +512,8 @@ export default function Workers() {
                 </Pressable>
               </View>
               <Text style={ui.subtitle}>
-                이름과 아이디를 입력하면 안전한 임시 비밀번호가 자동으로
-                생성됩니다.
+                작업자 정보와 작업 종류를 입력하면 안전한 임시 비밀번호가
+                자동으로 생성됩니다.
               </Text>
               <Card style={{ gap: 16 }}>
                 <Field
@@ -308,6 +530,108 @@ export default function Workers() {
                   autoCorrect={false}
                   placeholder="영문 소문자/숫자 3~32자"
                 />
+                <Field
+                  label="전화번호 *"
+                  value={phone}
+                  onChangeText={setPhone}
+                  keyboardType="phone-pad"
+                  maxLength={11}
+                  placeholder="01012345678"
+                />
+                {Platform.OS !== 'web' ? (
+                  <Pressable
+                    disabled={pickingContact}
+                    onPress={() => void pickContact('create')}
+                    style={({ pressed }) => [
+                      styles.contactButton,
+                      pressed && styles.pressed,
+                    ]}
+                  >
+                    <Text style={styles.contactButtonText}>
+                      {pickingContact ? '연락처 여는 중...' : '연락처에서 선택'}
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {contactSelection?.target === 'create' ? (
+                  <View style={styles.contactSelection}>
+                    <Text style={styles.contactSelectionTitle}>
+                      {contactSelection.name || '선택한 연락처'}의 전화번호를
+                      선택해주세요.
+                    </Text>
+                    {contactSelection.phones.map((contactPhone) => (
+                      <Pressable
+                        key={contactPhone}
+                        onPress={() =>
+                          applyContact(
+                            contactSelection.name,
+                            contactPhone,
+                            'create',
+                          )
+                        }
+                        style={styles.contactPhoneOption}
+                      >
+                        <Text style={styles.contactPhoneText}>
+                          {formatPhone(contactPhone)}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+                <View style={styles.workTypeField}>
+                  <Text style={styles.fieldLabel}>작업 종류 *</Text>
+                  <View style={styles.workTypeGrid}>
+                    {workTypes.map((workType) => {
+                      const selected = selectedWorkTypeId === workType.id;
+                      return (
+                        <Pressable
+                          key={workType.id}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: selected }}
+                          onPress={() => setSelectedWorkTypeId(workType.id)}
+                          style={[
+                            styles.workTypeOption,
+                            selected && {
+                              borderColor: workType.colorHex,
+                              backgroundColor: `${workType.colorHex}14`,
+                            },
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.radio,
+                              selected && { borderColor: workType.colorHex },
+                            ]}
+                          >
+                            {selected ? (
+                              <View
+                                style={[
+                                  styles.radioSelected,
+                                  { backgroundColor: workType.colorHex },
+                                ]}
+                              />
+                            ) : null}
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.workTypeName}>
+                              {workType.name}
+                            </Text>
+                            {workType.note ? (
+                              <Text style={styles.workTypeNote}>
+                                {workType.note}
+                              </Text>
+                            ) : null}
+                          </View>
+                          <View
+                            style={[
+                              styles.optionColor,
+                              { backgroundColor: workType.colorHex },
+                            ]}
+                          />
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
                 <Button
                   title={busy ? '계정 생성 중...' : '계정 생성'}
                   onPress={submit}
@@ -316,6 +640,133 @@ export default function Workers() {
               </Card>
             </>
           )}
+        </ScrollView>
+      </Modal>
+
+      <Modal
+        visible={Boolean(editingWorkerId)}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={closeEdit}
+      >
+        <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
+          <View style={[ui.row, { justifyContent: 'space-between' }]}>
+            <Text style={ui.title}>작업자 정보 변경</Text>
+            <Pressable disabled={editBusy} onPress={closeEdit}>
+              <Text style={styles.close}>닫기</Text>
+            </Pressable>
+          </View>
+          <Text style={ui.subtitle}>
+            작업자의 이름, 전화번호와 작업 종류를 변경할 수 있습니다.
+          </Text>
+          <Card style={{ gap: 16 }}>
+            <Field
+              label="이름 *"
+              value={editName}
+              onChangeText={setEditName}
+              placeholder="작업자 이름"
+            />
+            <Field
+              label="전화번호 *"
+              value={editPhone}
+              onChangeText={setEditPhone}
+              keyboardType="phone-pad"
+              maxLength={11}
+              placeholder="01012345678"
+            />
+            {Platform.OS !== 'web' ? (
+              <Pressable
+                disabled={pickingContact}
+                onPress={() => void pickContact('edit')}
+                style={({ pressed }) => [
+                  styles.contactButton,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.contactButtonText}>
+                  {pickingContact ? '연락처 여는 중...' : '연락처에서 선택'}
+                </Text>
+              </Pressable>
+            ) : null}
+            {contactSelection?.target === 'edit' ? (
+              <View style={styles.contactSelection}>
+                <Text style={styles.contactSelectionTitle}>
+                  {contactSelection.name || '선택한 연락처'}의 전화번호를
+                  선택해주세요.
+                </Text>
+                {contactSelection.phones.map((contactPhone) => (
+                  <Pressable
+                    key={contactPhone}
+                    onPress={() =>
+                      applyContact(
+                        contactSelection.name,
+                        contactPhone,
+                        'edit',
+                      )
+                    }
+                    style={styles.contactPhoneOption}
+                  >
+                    <Text style={styles.contactPhoneText}>
+                      {formatPhone(contactPhone)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+            <View style={styles.workTypeField}>
+              <Text style={styles.fieldLabel}>작업 종류 *</Text>
+              <View style={styles.workTypeGrid}>
+                {workTypes.map((workType) => {
+                  const selected = editWorkTypeId === workType.id;
+                  return (
+                    <Pressable
+                      key={workType.id}
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: selected }}
+                      onPress={() => setEditWorkTypeId(workType.id)}
+                      style={[
+                        styles.workTypeOption,
+                        selected && {
+                          borderColor: workType.colorHex,
+                          backgroundColor: `${workType.colorHex}14`,
+                        },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.radio,
+                          selected && { borderColor: workType.colorHex },
+                        ]}
+                      >
+                        {selected ? (
+                          <View
+                            style={[
+                              styles.radioSelected,
+                              { backgroundColor: workType.colorHex },
+                            ]}
+                          />
+                        ) : null}
+                      </View>
+                      <Text style={[styles.workTypeName, { flex: 1 }]}>
+                        {workType.name}
+                      </Text>
+                      <View
+                        style={[
+                          styles.optionColor,
+                          { backgroundColor: workType.colorHex },
+                        ]}
+                      />
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+            <Button
+              title={editBusy ? '저장 중...' : '변경 내용 저장'}
+              onPress={submitEdit}
+              disabled={editBusy}
+            />
+          </Card>
         </ScrollView>
       </Modal>
     </>
@@ -332,16 +783,39 @@ const styles = StyleSheet.create({
   addText: { color: '#fff', fontWeight: '700' },
   worker: { flexDirection: 'row', alignItems: 'center', gap: 13 },
   avatar: {
-    width: 46,
+    width: 58,
     height: 46,
     borderRadius: 15,
     backgroundColor: colors.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarText: { color: colors.primary, fontSize: 18, fontWeight: '800' },
+  workTypeAvatarText: { color: '#fff', fontSize: 12, fontWeight: '800' },
   name: { color: colors.ink, fontWeight: '700', fontSize: 16 },
   id: { color: colors.muted, fontSize: 13, marginTop: 3 },
+  phone: { color: colors.muted, fontSize: 13, marginTop: 3 },
+  contactButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.primarySoft,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  contactButtonText: { color: colors.primary, fontSize: 13, fontWeight: '700' },
+  contactSelection: {
+    gap: 7,
+    borderRadius: 12,
+    backgroundColor: colors.background,
+    padding: 12,
+  },
+  contactSelectionTitle: { color: colors.ink, fontSize: 13, fontWeight: '700' },
+  contactPhoneOption: {
+    borderRadius: 9,
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  contactPhoneText: { color: colors.primary, fontSize: 14, fontWeight: '700' },
   ready: { color: colors.success, fontWeight: '700', fontSize: 12 },
   waiting: { color: colors.warning, fontWeight: '700', fontSize: 12 },
   jobCount: { color: colors.muted, fontSize: 12 },
@@ -353,10 +827,43 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primarySoft,
   },
   deleteButton: { backgroundColor: '#FEECEB' },
+  editText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   resetText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   deleteText: { color: colors.danger, fontSize: 11, fontWeight: '700' },
   pressed: { opacity: 0.55 },
   close: { color: colors.primary, fontWeight: '700', fontSize: 16 },
+  workTypeField: { gap: 8 },
+  fieldLabel: { color: colors.ink, fontWeight: '600', fontSize: 14 },
+  workTypeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  workTypeOption: {
+    width: '48%',
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    padding: 11,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+  },
+  radio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioSelected: { width: 10, height: 10, borderRadius: 5 },
+  workTypeName: { color: colors.ink, fontSize: 14, fontWeight: '700' },
+  workTypeNote: { color: colors.muted, fontSize: 10, marginTop: 2 },
+  optionColor: { width: 10, height: 10, borderRadius: 5 },
   resultCard: { gap: 15 },
   resultRow: {
     flexDirection: 'row',

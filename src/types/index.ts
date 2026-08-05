@@ -1,5 +1,14 @@
 export type Role = 'admin' | 'worker';
 
+export type WorkType = {
+  id: number;
+  name: string;
+  note: string | null;
+  colorHex: string;
+  sortOrder: number;
+  active: boolean;
+};
+
 export type User = {
   id: string;
   loginId: string;
@@ -7,6 +16,8 @@ export type User = {
   role: Role;
   mustChangePassword: boolean;
   active: boolean;
+  phone: string | null;
+  workTypeId: number | null;
   createdAt: string;
 };
 

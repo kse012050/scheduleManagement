@@ -1,11 +1,18 @@
 import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { Alert, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, Card, ui } from '@/components/UI';
+import { Button, Card, Field, ui } from '@/components/UI';
 import { colors } from '@/constants/theme';
 import { useApp } from '@/store/AppContext';
 
 export default function Profile() {
-  const { currentUser, logout } = useApp();
+  const { currentUser, logout, updateAdminPhone } = useApp();
+  const [phone, setPhone] = useState('');
+  const [savingPhone, setSavingPhone] = useState(false);
+
+  useEffect(() => {
+    setPhone(currentUser?.phone ?? '');
+  }, [currentUser?.phone]);
 
   if (!currentUser) return null;
 
@@ -34,6 +41,19 @@ export default function Profile() {
     ]);
   };
 
+  const savePhone = async () => {
+    setSavingPhone(true);
+    const error = await updateAdminPhone(phone);
+    setSavingPhone(false);
+
+    if (error) {
+      Alert.alert('전화번호 변경 실패', error);
+      return;
+    }
+
+    Alert.alert('저장 완료', '관리자 전화번호가 변경되었습니다.');
+  };
+
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
       <Text style={ui.title}>내 정보</Text>
@@ -57,6 +77,23 @@ export default function Profile() {
           </Text>
         </View>
       </Card>
+      {currentUser.role === 'admin' ? (
+        <Card style={{ gap: 12 }}>
+          <Field
+            label="관리자 전화번호"
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+            maxLength={11}
+            placeholder="01012345678"
+          />
+          <Button
+            title={savingPhone ? '저장 중...' : '전화번호 저장'}
+            onPress={savePhone}
+            disabled={savingPhone}
+          />
+        </Card>
+      ) : null}
       <Button title="로그아웃" kind="secondary" onPress={signOut} />
     </ScrollView>
   );

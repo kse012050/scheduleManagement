@@ -7,6 +7,7 @@ const corsHeaders = {
 };
 
 const loginIdPattern = /^[a-z0-9][a-z0-9._-]{2,31}$/;
+const phonePattern = /^01[016789][0-9]{7,8}$/;
 
 const jsonResponse = (body: Record<string, unknown>, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -110,7 +111,12 @@ Deno.serve(async (request) => {
     );
   }
 
-  let payload: { loginId?: unknown; name?: unknown };
+  let payload: {
+    loginId?: unknown;
+    name?: unknown;
+    phone?: unknown;
+    workTypeId?: unknown;
+  };
   try {
     payload = await request.json();
   } catch {
@@ -122,6 +128,15 @@ Deno.serve(async (request) => {
       ? payload.loginId.trim().toLowerCase()
       : '';
   const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+  const phone =
+    typeof payload.phone === 'string'
+      ? payload.phone.replace(/[^0-9]/g, '')
+      : '';
+  const workTypeId =
+    typeof payload.workTypeId === 'number' &&
+    Number.isSafeInteger(payload.workTypeId)
+      ? payload.workTypeId
+      : 0;
 
   if (!loginIdPattern.test(loginId)) {
     return jsonResponse(
@@ -138,6 +153,28 @@ Deno.serve(async (request) => {
       { error: '이름은 1~50자로 입력해주세요.' },
       400,
     );
+  }
+
+  if (!phonePattern.test(phone)) {
+    return jsonResponse(
+      { error: '전화번호를 올바르게 입력해주세요.' },
+      400,
+    );
+  }
+
+  const { data: workType, error: workTypeError } = await adminClient
+    .from('work_types')
+    .select('id')
+    .eq('id', workTypeId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (workTypeError) {
+    return jsonResponse({ error: '작업 종류를 확인하지 못했습니다.' }, 500);
+  }
+
+  if (!workType) {
+    return jsonResponse({ error: '작업 종류를 선택해주세요.' }, 400);
   }
 
   const { data: existingProfile, error: duplicateCheckError } =
@@ -164,6 +201,8 @@ Deno.serve(async (request) => {
       user_metadata: {
         login_id: loginId,
         name,
+        phone,
+        work_type_id: workTypeId,
       },
     });
 
@@ -186,6 +225,8 @@ Deno.serve(async (request) => {
         id: createdUser.user.id,
         loginId,
         name,
+        phone,
+        workTypeId,
       },
       temporaryPassword,
     },

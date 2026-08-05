@@ -6,7 +6,15 @@
     "orientation": "portrait",
     "scheme": "workschedule",
     "userInterfaceStyle": "light",
-    "plugins": ["expo-router"],
+    "plugins": [
+      "expo-router",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "작업자 정보를 입력하기 위해 연락처 접근을 허용해주세요."
+        }
+      ]
+    ],
     "experiments": { "typedRoutes": true },
     "web": { "bundler": "metro" },
     "android": { "package": "com.schedule.workmanager" },
