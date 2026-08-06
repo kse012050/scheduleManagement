@@ -1,6 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Modal,
   Pressable,
@@ -16,6 +17,11 @@ import {
 } from '@/components/MonthCalendar';
 import { colors } from '@/constants/theme';
 import { formatDate, today, validDate } from '@/lib/date';
+import {
+  hasKoreanWorkingDay,
+  isKoreanNonWorkingDay,
+  nextKoreanWorkingDay,
+} from '@/lib/koreanHolidays';
 import { useApp } from '@/store/AppContext';
 import { Schedule } from '@/types';
 
@@ -32,6 +38,7 @@ const formatPhone = (value: string) => {
 export default function JobDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
+    ready,
     currentUser,
     jobs,
     users,
@@ -47,14 +54,26 @@ export default function JobDetail() {
   const job = jobs.find((item) => item.id === id);
   const [editOpen, setEditOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
+  const [deleteScheduleId, setDeleteScheduleId] = useState<string | null>(
+    null,
+  );
+  const [deleteError, setDeleteError] = useState('');
+  const [deletingSchedule, setDeletingSchedule] = useState(false);
   const [editingScheduleId, setEditingScheduleId] = useState<string | null>(
     null,
   );
   const [assignOpen, setAssignOpen] = useState(false);
-  const [title, setTitle] = useState('');
+  const [selectedScheduleWorkerId, setSelectedScheduleWorkerId] = useState<
+    string | null
+  >(null);
   const [startDate, setStartDate] = useState(today());
   const [endDate, setEndDate] = useState(today());
   const [selectingEndDate, setSelectingEndDate] = useState(true);
+  const [excludeNonWorkingDays, setExcludeNonWorkingDays] = useState(true);
+  const [includedNonWorkingDates, setIncludedNonWorkingDates] = useState<
+    string[]
+  >([]);
   const [note, setNote] = useState('');
   const [editTitle, setEditTitle] = useState(job?.title ?? '');
   const [editLocation, setEditLocation] = useState(job?.location ?? '');
@@ -86,6 +105,19 @@ export default function JobDetail() {
       job.workerIds.includes(currentUser.id));
   const canManageJob = !!job && currentUser?.role === 'admin';
 
+  if (!ready) {
+    return (
+      <View
+        style={[
+          ui.screen,
+          { alignItems: 'center', justifyContent: 'center' },
+        ]}
+      >
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
+  }
+
   if (!job || !currentUser || !canViewJob) {
     return (
       <View
@@ -100,9 +132,27 @@ export default function JobDetail() {
     );
   }
 
+  const selectableScheduleWorkers = job.workerIds
+    .map((workerId) => users.find((user) => user.id === workerId))
+    .filter(
+      (worker): worker is NonNullable<typeof worker> =>
+        !!worker &&
+        worker.role === 'worker' &&
+        worker.active &&
+        (currentUser.role === 'admin' || worker.id === currentUser.id),
+    );
+
   const saveSchedule = async () => {
-    if (!title.trim()) {
-      Alert.alert('확인', '일정명을 입력해주세요.');
+    setScheduleError('');
+    if (
+      !selectedScheduleWorkerId ||
+      !selectableScheduleWorkers.some(
+        (worker) => worker.id === selectedScheduleWorkerId,
+      )
+    ) {
+      const message = '등록할 작업자를 선택해주세요.';
+      setScheduleError(message);
+      Alert.alert('확인', message);
       return;
     }
     if (
@@ -110,31 +160,69 @@ export default function JobDetail() {
       !validDate(endDate) ||
       startDate > endDate
     ) {
-      Alert.alert(
-        '확인',
-        '날짜를 YYYY-MM-DD 형식으로 올바르게 입력해주세요.',
+      const message =
+        '날짜를 YYYY-MM-DD 형식으로 올바르게 입력해주세요.';
+      setScheduleError(message);
+      Alert.alert('확인', message);
+      return;
+    }
+    if (
+      excludeNonWorkingDays &&
+      !hasKoreanWorkingDay(startDate, endDate) &&
+      includedNonWorkingDates.length === 0
+    ) {
+      const message =
+        '선택한 기간에 등록 가능한 평일이 없습니다. 기간을 변경하거나 주말·공휴일 제외를 해제해주세요.';
+      setScheduleError(message);
+      Alert.alert('확인', message);
+      return;
+    }
+
+    const overlappingSchedule = schedules.find(
+      (schedule) =>
+        schedule.workerId === selectedScheduleWorkerId &&
+        schedule.id !== editingScheduleId &&
+        schedule.startDate <= endDate &&
+        schedule.endDate >= startDate,
+    );
+    if (overlappingSchedule) {
+      const selectedWorker = selectableScheduleWorkers.find(
+        (worker) => worker.id === selectedScheduleWorkerId,
       );
+      const message = `${selectedWorker?.name ?? '선택한 작업자'}에게 ${formatDate(
+        overlappingSchedule.startDate,
+      )} ~ ${formatDate(
+        overlappingSchedule.endDate,
+      )} 일정이 이미 등록되어 있습니다.`;
+      setScheduleError(message);
+      Alert.alert('일정 중복', message);
       return;
     }
 
     const scheduleInput = {
       jobId: job.id,
-      title: title.trim(),
+      workerId: selectedScheduleWorkerId,
       startDate,
       endDate,
+      excludeNonWorkingDays,
+      includedNonWorkingDates,
       note: note.trim(),
     };
     const error = editingScheduleId
       ? await updateSchedule(editingScheduleId, scheduleInput)
       : await addSchedule(scheduleInput);
     if (error) {
+      setScheduleError(error);
       Alert.alert(editingScheduleId ? '수정 실패' : '등록 실패', error);
       return;
     }
 
-    setTitle('');
+    setSelectedScheduleWorkerId(null);
+    setExcludeNonWorkingDays(true);
+    setIncludedNonWorkingDates([]);
     setNote('');
     setEditingScheduleId(null);
+    setScheduleError('');
     setScheduleOpen(false);
   };
 
@@ -168,12 +256,18 @@ export default function JobDetail() {
   };
 
   const openForDate = (date: string) => {
+    const initialDate = isKoreanNonWorkingDay(date)
+      ? nextKoreanWorkingDay(date)
+      : date;
     setEditingScheduleId(null);
-    setTitle('');
+    setScheduleError('');
+    setSelectedScheduleWorkerId(null);
     setNote('');
-    setStartDate(date);
-    setEndDate(date);
+    setStartDate(initialDate);
+    setEndDate(initialDate);
     setSelectingEndDate(true);
+    setExcludeNonWorkingDays(true);
+    setIncludedNonWorkingDates([]);
     setScheduleOpen(true);
   };
 
@@ -187,19 +281,39 @@ export default function JobDetail() {
     }
 
     setEditingScheduleId(schedule.id);
-    setTitle(schedule.title);
+    setScheduleError('');
+    setSelectedScheduleWorkerId(schedule.workerId);
     setStartDate(schedule.startDate);
     setEndDate(schedule.endDate);
+    setExcludeNonWorkingDays(schedule.excludeNonWorkingDays);
+    setIncludedNonWorkingDates(schedule.includedNonWorkingDates);
     setNote(schedule.note);
     setSelectingEndDate(false);
     setScheduleOpen(true);
   };
 
   const selectScheduleDate = (date: string) => {
+    setScheduleError('');
+    if (excludeNonWorkingDays && isKoreanNonWorkingDay(date)) {
+      if (
+        !selectingEndDate &&
+        date >= startDate &&
+        date <= endDate
+      ) {
+        setIncludedNonWorkingDates((previous) =>
+          previous.includes(date)
+            ? previous.filter((item) => item !== date)
+            : [...previous, date].sort(),
+        );
+      }
+      return;
+    }
+
     if (!selectingEndDate) {
       setStartDate(date);
       setEndDate(date);
       setSelectingEndDate(true);
+      setIncludedNonWorkingDates([]);
       return;
     }
 
@@ -222,17 +336,30 @@ export default function JobDetail() {
   };
 
   const confirmDeleteSchedule = (scheduleId: string) => {
-    Alert.alert('일정 삭제', '이 일정을 삭제하시겠습니까?', [
-      { text: '취소' },
-      {
-        text: '삭제',
-        style: 'destructive',
-        onPress: async () => {
-          const error = await deleteSchedule(scheduleId);
-          if (error) Alert.alert('삭제 실패', error);
-        },
-      },
-    ]);
+    setDeleteError('');
+    setDeleteScheduleId(scheduleId);
+  };
+
+  const removeSchedule = async () => {
+    if (!deleteScheduleId || deletingSchedule) return;
+
+    setDeleteError('');
+    setDeletingSchedule(true);
+    const error = await deleteSchedule(deleteScheduleId);
+    setDeletingSchedule(false);
+
+    if (error) {
+      setDeleteError(error);
+      return;
+    }
+
+    if (editingScheduleId === deleteScheduleId) {
+      setEditingScheduleId(null);
+      setSelectedScheduleWorkerId(null);
+      setScheduleError('');
+      setScheduleOpen(false);
+    }
+    setDeleteScheduleId(null);
   };
 
   return (
@@ -243,14 +370,31 @@ export default function JobDetail() {
             <Text style={styles.jobTitle}>{job.title}</Text>
             <Text style={ui.badge}>{job.workerIds.length}명</Text>
           </View>
-          {job.location ? (
-            <Text style={styles.meta}>⌖ {job.location}</Text>
-          ) : null}
           {job.description ? (
             <Text style={styles.description}>{job.description}</Text>
           ) : null}
-          {job.customerPhone || job.entryPassword ? (
+          {job.location ||
+          job.customerPhone ||
+          job.entryPassword ||
+          canManageJob ? (
             <View style={styles.accessInfo}>
+              <View style={styles.accessHeader}>
+                <Text style={styles.accessTitle}>현장 정보</Text>
+                {canManageJob ? (
+                  <Pressable
+                    onPress={openEditJob}
+                    style={styles.compactEditButton}
+                  >
+                    <Text style={styles.compactEditButtonText}>정보 수정</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              {job.location ? (
+                <View style={styles.accessRow}>
+                  <Text style={styles.accessLabel}>위치</Text>
+                  <Text style={styles.accessValue}>⌖ {job.location}</Text>
+                </View>
+              ) : null}
               {job.customerPhone ? (
                 <View style={styles.accessRow}>
                   <Text style={styles.accessLabel}>고객 전화번호</Text>
@@ -305,13 +449,6 @@ export default function JobDetail() {
               <Text style={styles.peopleValue}>없음</Text>
             )}
           </View>
-          {canManageJob ? (
-            <Button
-              title="작업 정보 수정"
-              kind="secondary"
-              onPress={openEditJob}
-            />
-          ) : null}
           {currentUser.role === 'admin' ? (
             <Button
               title="작업자 배정"
@@ -348,6 +485,14 @@ export default function JobDetail() {
                 <Text style={styles.date}>
                   {formatDate(item.startDate)} ~ {formatDate(item.endDate)}
                 </Text>
+                {item.excludeNonWorkingDays ? (
+                  <Text style={styles.excludedDaysLabel}>
+                    토·일·공휴일 제외
+                    {item.includedNonWorkingDates.length
+                      ? ` · 예외 ${item.includedNonWorkingDates.length}일`
+                      : ''}
+                  </Text>
+                ) : null}
                 {item.note ? (
                   <Text style={styles.note}>{item.note}</Text>
                 ) : null}
@@ -440,7 +585,14 @@ export default function JobDetail() {
         visible={scheduleOpen}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setScheduleOpen(false)}
+        onRequestClose={() => {
+          setEditingScheduleId(null);
+          setSelectedScheduleWorkerId(null);
+          setScheduleError('');
+          setExcludeNonWorkingDays(true);
+          setIncludedNonWorkingDates([]);
+          setScheduleOpen(false);
+        }}
       >
         <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
           <View style={[ui.row, { justifyContent: 'space-between' }]}>
@@ -450,6 +602,10 @@ export default function JobDetail() {
             <Pressable
               onPress={() => {
                 setEditingScheduleId(null);
+                setSelectedScheduleWorkerId(null);
+                setScheduleError('');
+                setExcludeNonWorkingDays(true);
+                setIncludedNonWorkingDates([]);
                 setScheduleOpen(false);
               }}
             >
@@ -457,12 +613,81 @@ export default function JobDetail() {
             </Pressable>
           </View>
           <Card style={{ gap: 16 }}>
-            <Field
-              label="일정명 *"
-              value={title}
-              onChangeText={setTitle}
-              placeholder="예: 전기 배선 작업"
-            />
+            <View style={styles.scheduleWorkerSelection}>
+              <Text style={styles.scheduleWorkerLabel}>등록 작업자 *</Text>
+              {selectableScheduleWorkers.length ? (
+                <View style={styles.scheduleWorkerOptions}>
+                  {selectableScheduleWorkers.map((worker) => {
+                    const selected = selectedScheduleWorkerId === worker.id;
+                    const workType = workTypes.find(
+                      (item) => item.id === worker.workTypeId,
+                    );
+
+                    return (
+                      <Pressable
+                        key={worker.id}
+                        onPress={() => {
+                          setSelectedScheduleWorkerId(worker.id);
+                          setScheduleError('');
+                        }}
+                        style={[
+                          styles.scheduleWorkerOption,
+                          selected && styles.scheduleWorkerOptionSelected,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.scheduleWorkerWorkType,
+                            { color: workType?.colorHex ?? colors.muted },
+                          ]}
+                        >
+                          {workType?.name ?? '미지정'}
+                        </Text>
+                        <Text style={styles.scheduleWorkerName}>
+                          {worker.name}
+                        </Text>
+                        {selected ? (
+                          <Text style={styles.scheduleWorkerCheck}>✓</Text>
+                        ) : null}
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Text style={styles.scheduleWorkerEmpty}>
+                  선택할 수 있는 배정 작업자가 없습니다.
+                </Text>
+              )}
+            </View>
+            <Pressable
+              onPress={() => {
+                setExcludeNonWorkingDays((value) => {
+                  const nextValue = !value;
+                  if (!nextValue) setIncludedNonWorkingDates([]);
+                  return nextValue;
+                });
+              }}
+              style={styles.excludeDaysOption}
+            >
+              <View
+                style={[
+                  styles.excludeDaysCheck,
+                  excludeNonWorkingDays && styles.excludeDaysCheckSelected,
+                ]}
+              >
+                <Text style={styles.excludeDaysCheckText}>
+                  {excludeNonWorkingDays ? '✓' : ''}
+                </Text>
+              </View>
+              <View style={{ flex: 1, gap: 3 }}>
+                <Text style={styles.excludeDaysTitle}>
+                  주말·공휴일 제외
+                </Text>
+                <Text style={styles.excludeDaysHint}>
+                  토요일, 일요일, 공휴일과 대체공휴일을 일정에서 뺍니다.
+                </Text>
+              </View>
+            </Pressable>
             <View style={styles.dateSelection}>
               <Text style={styles.dateSelectionLabel}>작업 기간</Text>
               <Text style={styles.dateSelectionValue}>
@@ -470,8 +695,12 @@ export default function JobDetail() {
               </Text>
               <Text style={styles.dateSelectionHint}>
                 {selectingEndDate
-                  ? '종료일을 선택해주세요.'
-                  : '기간이 선택되었습니다. 다른 날짜를 누르면 다시 선택합니다.'}
+                  ? excludeNonWorkingDays
+                    ? '종료일을 선택해주세요. 주말과 공휴일은 선택할 수 없습니다.'
+                    : '종료일을 선택해주세요.'
+                  : excludeNonWorkingDays
+                    ? '기간 안의 주말·공휴일을 누르면 예외 작업일로 추가할 수 있습니다.'
+                    : '기간이 선택되었습니다. 다른 날짜를 누르면 다시 선택합니다.'}
               </Text>
             </View>
             <MonthCalendar
@@ -479,9 +708,12 @@ export default function JobDetail() {
               onSelectDate={selectScheduleDate}
               selectedStartDate={startDate}
               selectedEndDate={endDate}
+              excludeNonWorkingDays={excludeNonWorkingDays}
+              includedNonWorkingDates={includedNonWorkingDates}
+              enableNonWorkingDateExceptions={!selectingEndDate}
               selectionColor={
-                editingScheduleId
-                  ? getScheduleColor(editingScheduleId)
+                selectedScheduleWorkerId
+                  ? getScheduleColor(selectedScheduleWorkerId)
                   : undefined
               }
             />
@@ -493,12 +725,66 @@ export default function JobDetail() {
               multiline
               style={{ height: 90, paddingTop: 14, textAlignVertical: 'top' }}
             />
+            {scheduleError ? (
+              <View style={styles.scheduleError}>
+                <Text style={styles.scheduleErrorTitle}>등록할 수 없습니다</Text>
+                <Text style={styles.scheduleErrorText}>{scheduleError}</Text>
+              </View>
+            ) : null}
             <Button
               title={editingScheduleId ? '수정 내용 저장' : '일정 등록'}
               onPress={saveSchedule}
             />
+            {editingScheduleId ? (
+              <Button
+                title="이 일정 삭제"
+                kind="danger"
+                onPress={() => confirmDeleteSchedule(editingScheduleId)}
+              />
+            ) : null}
           </Card>
         </ScrollView>
+      </Modal>
+
+      <Modal
+        visible={!!deleteScheduleId}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (!deletingSchedule) setDeleteScheduleId(null);
+        }}
+      >
+        <View style={styles.confirmBackdrop}>
+          <Card style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>일정을 삭제할까요?</Text>
+            <Text style={styles.confirmText}>
+              {jobSchedules.find((item) => item.id === deleteScheduleId)
+                ?.title ?? '선택한 일정'}
+              을 삭제하면 달력과 목록에서 제거되며 복구할 수 없습니다.
+            </Text>
+            {deleteError ? (
+              <Text style={styles.confirmError}>{deleteError}</Text>
+            ) : null}
+            <View style={styles.confirmActions}>
+              <View style={styles.confirmAction}>
+                <Button
+                  title="취소"
+                  kind="secondary"
+                  disabled={deletingSchedule}
+                  onPress={() => setDeleteScheduleId(null)}
+                />
+              </View>
+              <View style={styles.confirmAction}>
+                <Button
+                  title={deletingSchedule ? '삭제 중...' : '삭제'}
+                  kind="danger"
+                  disabled={deletingSchedule}
+                  onPress={removeSchedule}
+                />
+              </View>
+            </View>
+          </Card>
+        </View>
       </Modal>
 
       <Modal
@@ -581,13 +867,32 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
   },
-  meta: { color: colors.muted },
   description: { color: '#475467', lineHeight: 21 },
   accessInfo: {
     backgroundColor: '#FFF8E7',
     borderRadius: 12,
     padding: 12,
     gap: 10,
+  },
+  accessHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  accessTitle: { color: colors.ink, fontSize: 15, fontWeight: '800' },
+  compactEditButton: {
+    borderWidth: 1,
+    borderColor: '#F3D79B',
+    borderRadius: 9,
+    backgroundColor: '#fff',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  compactEditButtonText: {
+    color: '#B54708',
+    fontSize: 12,
+    fontWeight: '800',
   },
   accessRow: { gap: 4 },
   accessLabel: { color: colors.muted, fontSize: 12 },
@@ -600,7 +905,12 @@ const styles = StyleSheet.create({
   },
   peopleLabel: { color: colors.muted, fontSize: 12 },
   peopleValue: { color: colors.ink, fontWeight: '600' },
-  assignedWorkerList: { gap: 8, marginTop: 2 },
+  assignedWorkerList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 2,
+  },
   assignedWorker: {
     minHeight: 40,
     flexDirection: 'row',
@@ -624,6 +934,7 @@ const styles = StyleSheet.create({
   schedule: { flexDirection: 'row', gap: 10 },
   scheduleTitle: { color: colors.ink, fontSize: 16, fontWeight: '700' },
   date: { color: colors.primary, fontSize: 13, fontWeight: '600' },
+  excludedDaysLabel: { color: colors.muted, fontSize: 12, fontWeight: '600' },
   dateSelection: {
     backgroundColor: colors.primarySoft,
     borderRadius: 12,
@@ -637,6 +948,86 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   dateSelectionHint: { color: colors.muted, fontSize: 12, lineHeight: 17 },
+  scheduleWorkerSelection: { gap: 8 },
+  scheduleWorkerLabel: { color: colors.ink, fontSize: 14, fontWeight: '600' },
+  scheduleWorkerOptions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  scheduleWorkerOption: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 11,
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  scheduleWorkerOptionSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  scheduleWorkerWorkType: { fontSize: 14, fontWeight: '900' },
+  scheduleWorkerName: { color: colors.ink, fontSize: 14, fontWeight: '700' },
+  scheduleWorkerCheck: { color: colors.primary, fontWeight: '900' },
+  scheduleWorkerEmpty: { color: colors.danger, fontSize: 13 },
+  excludeDaysOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    padding: 12,
+  },
+  excludeDaysCheck: {
+    width: 24,
+    height: 24,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  excludeDaysCheckSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+  },
+  excludeDaysCheckText: { color: '#fff', fontWeight: '900' },
+  excludeDaysTitle: { color: colors.ink, fontSize: 14, fontWeight: '700' },
+  excludeDaysHint: { color: colors.muted, fontSize: 12, lineHeight: 17 },
+  scheduleError: {
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 12,
+    backgroundColor: '#FEF2F2',
+    padding: 12,
+    gap: 4,
+  },
+  scheduleErrorTitle: {
+    color: colors.danger,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  scheduleErrorText: { color: '#991B1B', fontSize: 13, lineHeight: 18 },
+  confirmBackdrop: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    padding: 20,
+  },
+  confirmCard: { width: '100%', maxWidth: 420, gap: 14 },
+  confirmTitle: { color: colors.ink, fontSize: 20, fontWeight: '800' },
+  confirmText: { color: '#475467', fontSize: 14, lineHeight: 21 },
+  confirmError: { color: colors.danger, fontSize: 13, fontWeight: '700' },
+  confirmActions: { flexDirection: 'row', gap: 10 },
+  confirmAction: { flex: 1 },
   note: { color: '#475467', lineHeight: 19 },
   owner: { color: colors.muted, fontSize: 12 },
   delete: {

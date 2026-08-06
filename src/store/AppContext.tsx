@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { loginIdToEmail, normalizeLoginId, supabase } from '@/lib/supabase';
+import { isKoreanNonWorkingDay } from '@/lib/koreanHolidays';
 import { Job, Role, Schedule, User, WorkType } from '@/types';
 
 const LOGIN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/;
@@ -46,12 +47,38 @@ type AssignmentRow = {
 type ScheduleRow = {
   id: string;
   job_id: string;
+  worker_id: string | null;
   title: string;
   start_date: string;
   end_date: string;
+  exclude_non_working_days: boolean;
+  included_non_working_dates: string[];
   note: string;
   created_by: string;
   created_at: string;
+};
+
+type ScheduleRowWithoutExclusion = Omit<
+  ScheduleRow,
+  'exclude_non_working_days' | 'included_non_working_dates'
+>;
+type ScheduleRowWithoutIncludedDates = Omit<
+  ScheduleRow,
+  'included_non_working_dates'
+>;
+type LegacyScheduleRow = Omit<
+  ScheduleRow,
+  'worker_id' | 'exclude_non_working_days' | 'included_non_working_dates'
+>;
+
+type ScheduleInput = {
+  jobId: string;
+  workerId: string;
+  startDate: string;
+  endDate: string;
+  excludeNonWorkingDays: boolean;
+  includedNonWorkingDates: string[];
+  note: string;
 };
 
 type ContextValue = {
@@ -97,10 +124,10 @@ type ContextValue = {
     },
   ) => Promise<string | null>;
   setJobWorkers: (jobId: string, workerIds: string[]) => Promise<string | null>;
-  addSchedule: (input: Omit<Schedule, 'id' | 'createdAt' | 'createdBy'>) => Promise<string | null>;
+  addSchedule: (input: ScheduleInput) => Promise<string | null>;
   updateSchedule: (
     scheduleId: string,
-    input: Omit<Schedule, 'id' | 'createdAt' | 'createdBy'>,
+    input: ScheduleInput,
   ) => Promise<string | null>;
   deleteSchedule: (id: string) => Promise<string | null>;
   canManageSchedule: (schedule: Schedule) => boolean;
@@ -201,16 +228,16 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         .select('job_id, worker_id'),
       supabase
         .from('schedules')
-        .select('id, job_id, title, start_date, end_date, note, created_by, created_at')
+        .select(
+          'id, job_id, worker_id, title, start_date, end_date, exclude_non_working_days, included_non_working_dates, note, created_by, created_at',
+        )
         .order('start_date', { ascending: true }),
     ]);
 
-    const firstError =
-      jobsResult.error ?? assignmentsResult.error ?? schedulesResult.error;
-    if (firstError) {
+    const jobsError = jobsResult.error ?? assignmentsResult.error;
+    if (jobsError) {
       setJobs([]);
-      setSchedules([]);
-      return firstError.message;
+      return jobsError.message;
     }
 
     const assignmentRows = assignmentsResult.data as AssignmentRow[];
@@ -229,13 +256,85 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         createdBy: job.created_by,
       })),
     );
+
+    let scheduleRows: ScheduleRow[] | null = null;
+    let scheduleError = schedulesResult.error;
+
+    if (!schedulesResult.error) {
+      scheduleRows = schedulesResult.data as ScheduleRow[];
+    } else {
+      const withoutIncludedDatesResult = await supabase
+        .from('schedules')
+        .select(
+          'id, job_id, worker_id, title, start_date, end_date, exclude_non_working_days, note, created_by, created_at',
+        )
+        .order('start_date', { ascending: true });
+
+      if (!withoutIncludedDatesResult.error) {
+        scheduleRows = (
+          withoutIncludedDatesResult.data as ScheduleRowWithoutIncludedDates[]
+        ).map((schedule) => ({
+          ...schedule,
+          included_non_working_dates: [],
+        }));
+        scheduleError = null;
+      } else {
+        const withoutExclusionResult = await supabase
+          .from('schedules')
+          .select(
+            'id, job_id, worker_id, title, start_date, end_date, note, created_by, created_at',
+          )
+          .order('start_date', { ascending: true });
+
+        if (!withoutExclusionResult.error) {
+          scheduleRows = (
+            withoutExclusionResult.data as ScheduleRowWithoutExclusion[]
+          ).map((schedule) => ({
+            ...schedule,
+            exclude_non_working_days: true,
+            included_non_working_dates: [],
+          }));
+          scheduleError = null;
+        } else {
+          const legacyResult = await supabase
+            .from('schedules')
+            .select(
+              'id, job_id, title, start_date, end_date, note, created_by, created_at',
+            )
+            .order('start_date', { ascending: true });
+
+          if (!legacyResult.error) {
+            scheduleRows = (legacyResult.data as LegacyScheduleRow[]).map(
+              (schedule) => ({
+                ...schedule,
+                worker_id: null,
+                exclude_non_working_days: true,
+                included_non_working_dates: [],
+              }),
+            );
+            scheduleError = null;
+          } else {
+            scheduleError = legacyResult.error;
+          }
+        }
+      }
+    }
+
+    if (scheduleError || !scheduleRows) {
+      setSchedules([]);
+      return scheduleError?.message ?? '일정 정보를 불러오지 못했습니다.';
+    }
+
     setSchedules(
-      (schedulesResult.data as ScheduleRow[]).map((schedule) => ({
+      scheduleRows.map((schedule) => ({
         id: schedule.id,
         jobId: schedule.job_id,
+        workerId: schedule.worker_id,
         title: schedule.title,
         startDate: schedule.start_date,
         endDate: schedule.end_date,
+        excludeNonWorkingDays: schedule.exclude_non_working_days,
+        includedNonWorkingDates: schedule.included_non_working_dates,
         note: schedule.note,
         createdBy: schedule.created_by,
         createdAt: schedule.created_at,
@@ -683,14 +782,54 @@ export function AppProvider({ children }: React.PropsWithChildren) {
       addSchedule: async (input) => {
         if (!currentUser) return '로그인이 필요합니다.';
 
+        const targetJob = jobs.find((job) => job.id === input.jobId);
+        const scheduleWorker = users.find(
+          (user) =>
+            user.id === input.workerId &&
+            user.role === 'worker' &&
+            user.active,
+        );
+        if (
+          !targetJob ||
+          !scheduleWorker ||
+          !targetJob.workerIds.includes(scheduleWorker.id)
+        ) {
+          return '배정된 작업자를 선택해주세요.';
+        }
+        if (
+          currentUser.role !== 'admin' &&
+          scheduleWorker.id !== currentUser.id
+        ) {
+          return '작업자는 자신의 일정만 등록할 수 있습니다.';
+        }
+
+        const scheduleWorkType = workTypes.find(
+          (workType) => workType.id === scheduleWorker.workTypeId,
+        );
+        const scheduleTitle = `${scheduleWorkType?.name ?? '미지정'} ${scheduleWorker.name}`;
+        const includedNonWorkingDates = input.excludeNonWorkingDays
+          ? [...new Set(input.includedNonWorkingDates)].filter(
+              (date) =>
+                date >= input.startDate &&
+                date <= input.endDate &&
+                isKoreanNonWorkingDay(date),
+            )
+          : [];
+
         const { error } = await supabase.from('schedules').insert({
           job_id: input.jobId,
-          title: input.title.trim(),
+          worker_id: scheduleWorker.id,
+          title: scheduleTitle,
           start_date: input.startDate,
           end_date: input.endDate,
+          exclude_non_working_days: input.excludeNonWorkingDays,
+          included_non_working_dates: includedNonWorkingDates,
           note: input.note.trim(),
           created_by: currentUser.id,
         });
+        if (error?.code === '23P01') {
+          return '선택한 작업자는 해당 기간에 이미 다른 일정이 있습니다.';
+        }
         if (error) return '일정을 등록하지 못했습니다.';
 
         await refreshWorkData();
@@ -711,15 +850,55 @@ export function AppProvider({ children }: React.PropsWithChildren) {
           return '이 일정을 수정할 권한이 없습니다.';
         }
 
+        const targetJob = jobs.find((job) => job.id === input.jobId);
+        const scheduleWorker = users.find(
+          (user) =>
+            user.id === input.workerId &&
+            user.role === 'worker' &&
+            user.active,
+        );
+        if (
+          !targetJob ||
+          !scheduleWorker ||
+          !targetJob.workerIds.includes(scheduleWorker.id)
+        ) {
+          return '배정된 작업자를 선택해주세요.';
+        }
+        if (
+          currentUser.role !== 'admin' &&
+          scheduleWorker.id !== currentUser.id
+        ) {
+          return '작업자는 자신의 일정만 수정할 수 있습니다.';
+        }
+
+        const scheduleWorkType = workTypes.find(
+          (workType) => workType.id === scheduleWorker.workTypeId,
+        );
+        const scheduleTitle = `${scheduleWorkType?.name ?? '미지정'} ${scheduleWorker.name}`;
+        const includedNonWorkingDates = input.excludeNonWorkingDays
+          ? [...new Set(input.includedNonWorkingDates)].filter(
+              (date) =>
+                date >= input.startDate &&
+                date <= input.endDate &&
+                isKoreanNonWorkingDay(date),
+            )
+          : [];
+
         const { error } = await supabase
           .from('schedules')
           .update({
-            title: input.title.trim(),
+            worker_id: scheduleWorker.id,
+            title: scheduleTitle,
             start_date: input.startDate,
             end_date: input.endDate,
+            exclude_non_working_days: input.excludeNonWorkingDays,
+            included_non_working_dates: includedNonWorkingDates,
             note: input.note.trim(),
           })
           .eq('id', scheduleId);
+        if (error?.code === '23P01') {
+          return '선택한 작업자는 해당 기간에 이미 다른 일정이 있습니다.';
+        }
         if (error) return '일정을 수정하지 못했습니다.';
 
         await refreshWorkData();
@@ -734,11 +913,14 @@ export function AppProvider({ children }: React.PropsWithChildren) {
           return '이 일정을 삭제할 권한이 없습니다.';
         }
 
-        const { error } = await supabase
+        const { error, count } = await supabase
           .from('schedules')
-          .delete()
+          .delete({ count: 'exact' })
           .eq('id', id);
         if (error) return '일정을 삭제하지 못했습니다.';
+        if (count === 0) {
+          return '일정을 찾을 수 없거나 삭제할 권한이 없습니다.';
+        }
 
         setSchedules((previous) =>
           previous.filter((schedule) => schedule.id !== id),

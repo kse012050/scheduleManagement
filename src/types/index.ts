@@ -36,9 +36,12 @@ export type Job = {
 export type Schedule = {
   id: string;
   jobId: string;
+  workerId: string | null;
   title: string;
   startDate: string;
   endDate: string;
+  excludeNonWorkingDays: boolean;
+  includedNonWorkingDates: string[];
   note: string;
   createdBy: string;
   createdAt: string;

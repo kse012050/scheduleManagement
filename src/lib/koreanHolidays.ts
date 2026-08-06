@@ -143,3 +143,31 @@ export const getKoreanHolidays = (year: number) => {
   cache.set(year, holidays);
   return holidays;
 };
+
+export const isKoreanNonWorkingDay = (dateKey: string) => {
+  const year = Number(dateKey.slice(0, 4));
+  if (!Number.isInteger(year)) return false;
+
+  return isWeekend(dateKey) || getKoreanHolidays(year).has(dateKey);
+};
+
+export const hasKoreanWorkingDay = (startDate: string, endDate: string) => {
+  let cursor = startDate;
+
+  while (cursor <= endDate) {
+    if (!isKoreanNonWorkingDay(cursor)) return true;
+    cursor = addDays(cursor, 1);
+  }
+
+  return false;
+};
+
+export const nextKoreanWorkingDay = (dateKey: string) => {
+  let cursor = dateKey;
+
+  while (isKoreanNonWorkingDay(cursor)) {
+    cursor = addDays(cursor, 1);
+  }
+
+  return cursor;
+};

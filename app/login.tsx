@@ -1,7 +1,8 @@
-import { router } from 'expo-router';
+import { Redirect, router } from 'expo-router';
 import { useState } from 'react';
 import {
   KeyboardAvoidingView,
+  ActivityIndicator,
   Platform,
   StyleSheet,
   Text,
@@ -12,11 +13,23 @@ import { Button, Card, Field } from '@/components/UI';
 import { useApp } from '@/store/AppContext';
 
 export default function Login() {
-  const { login } = useApp();
+  const { ready, currentUser, login } = useApp();
   const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  if (!ready) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
+  }
+  if (currentUser?.mustChangePassword) {
+    return <Redirect href="/change-password" />;
+  }
+  if (currentUser) return <Redirect href="/(tabs)" />;
 
   const submit = async () => {
     setBusy(true);
@@ -82,6 +95,12 @@ export default function Login() {
 }
 
 const styles = StyleSheet.create({
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.background,
+  },
   screen: {
     flex: 1,
     backgroundColor: colors.background,

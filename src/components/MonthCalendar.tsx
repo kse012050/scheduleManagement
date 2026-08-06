@@ -2,7 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '@/constants/theme';
 import { dateKey, isDateInRange, monthTitle, today } from '@/lib/date';
-import { getKoreanHolidays } from '@/lib/koreanHolidays';
+import {
+  getKoreanHolidays,
+  isKoreanNonWorkingDay,
+} from '@/lib/koreanHolidays';
 import { Schedule } from '@/types';
 
 const scheduleColors = [
@@ -22,6 +25,20 @@ export const getScheduleColor = (id: string) => {
   return scheduleColors[hash % scheduleColors.length];
 };
 
+const moveDate = (value: string, amount: number) => {
+  const [year, month, day] = value.split('-').map(Number);
+  const moved = new Date(year, month - 1, day + amount);
+  return dateKey(moved.getFullYear(), moved.getMonth(), moved.getDate());
+};
+
+const isScheduleActiveOnDate = (schedule: Schedule, value: string) =>
+  isDateInRange(value, schedule.startDate, schedule.endDate) &&
+  !(
+    schedule.excludeNonWorkingDays &&
+    isKoreanNonWorkingDay(value) &&
+    !schedule.includedNonWorkingDates.includes(value)
+  );
+
 type MonthCalendarProps = {
   schedules: Schedule[];
   onSelectDate: (date: string) => void;
@@ -29,6 +46,9 @@ type MonthCalendarProps = {
   selectedStartDate?: string;
   selectedEndDate?: string;
   selectionColor?: string;
+  excludeNonWorkingDays?: boolean;
+  includedNonWorkingDates?: string[];
+  enableNonWorkingDateExceptions?: boolean;
 };
 
 export function MonthCalendar({
@@ -38,6 +58,9 @@ export function MonthCalendar({
   selectedStartDate,
   selectedEndDate,
   selectionColor = colors.primary,
+  excludeNonWorkingDays = false,
+  includedNonWorkingDates = [],
+  enableNonWorkingDateExceptions = false,
 }: MonthCalendarProps) {
   const [cursor, setCursor] = useState(() => {
     const initialDate = selectedStartDate
@@ -58,23 +81,36 @@ export function MonthCalendar({
   ];
   while (cells.length % 7) cells.push(null);
 
-  const visibleSchedules = useMemo(
-    () =>
-      [...schedules]
-        .filter(
-          (schedule) =>
-            schedule.endDate >= monthStart &&
-            schedule.startDate <= monthEnd,
-        )
-        .sort(
-          (a, b) =>
-            a.startDate.localeCompare(b.startDate) ||
-            a.endDate.localeCompare(b.endDate) ||
-            a.id.localeCompare(b.id),
-        )
-        .slice(0, 3),
-    [schedules, monthStart, monthEnd],
-  );
+  const scheduleLanes = useMemo(() => {
+    const lanes = new Map<string, Schedule[]>();
+
+    [...schedules]
+      .filter(
+        (schedule) =>
+          schedule.endDate >= monthStart &&
+          schedule.startDate <= monthEnd,
+      )
+      .sort(
+        (a, b) =>
+          a.startDate.localeCompare(b.startDate) ||
+          a.endDate.localeCompare(b.endDate) ||
+          a.id.localeCompare(b.id),
+      )
+      .forEach((schedule) => {
+        const laneKey = schedule.workerId
+          ? `worker:${schedule.workerId}`
+          : `schedule:${schedule.id}`;
+        const lane = lanes.get(laneKey) ?? [];
+        lane.push(schedule);
+        lanes.set(laneKey, lane);
+      });
+
+    return [...lanes.entries()].map(([key, laneSchedules]) => ({
+      key,
+      schedules: laneSchedules,
+    }));
+  }, [schedules, monthStart, monthEnd]);
+  const visibleScheduleLanes = scheduleLanes.slice(0, 3);
 
   const move = (amount: number) =>
     setCursor(new Date(year, month + amount, 1));
@@ -114,44 +150,69 @@ export function MonthCalendar({
 
           const key = dateKey(year, month, day);
           const holiday = koreanHolidays.get(key);
-          const selected =
+          const nonWorkingDay = isKoreanNonWorkingDay(key);
+          const includedNonWorkingDay =
+            includedNonWorkingDates.includes(key);
+          const canToggleNonWorkingDay =
+            excludeNonWorkingDays &&
+            nonWorkingDay &&
+            enableNonWorkingDateExceptions &&
             !!selectedStartDate &&
             !!selectedEndDate &&
             isDateInRange(key, selectedStartDate, selectedEndDate);
-          const isSelectionStart = key === selectedStartDate;
-          const isSelectionEnd = key === selectedEndDate;
+          const dateDisabled =
+            excludeNonWorkingDays &&
+            nonWorkingDay &&
+            !canToggleNonWorkingDay;
+          const selectableDate = !(
+            excludeNonWorkingDays &&
+            nonWorkingDay &&
+            !includedNonWorkingDay
+          );
+          const selected =
+            !!selectedStartDate &&
+            !!selectedEndDate &&
+            isDateInRange(key, selectedStartDate, selectedEndDate) &&
+            selectableDate;
+          const isSelectionStart =
+            selectableDate && key === selectedStartDate;
+          const isSelectionEnd = selectableDate && key === selectedEndDate;
           const weekStart = index % 7 === 0;
           const weekEnd = index % 7 === 6;
 
           return (
             <Pressable
               key={key}
+              disabled={dateDisabled}
               onPress={() => onSelectDate(key)}
               style={[
                 styles.cell,
+                dateDisabled && styles.disabledCell,
                 selected && {
                   backgroundColor: `${selectionColor}1F`,
                 },
               ]}
             >
-              <Text
-                style={[
-                  styles.day,
-                  weekEnd && { color: '#2563EB' },
-                  (weekStart || holiday) && { color: colors.danger },
-                  key === today() &&
-                    !isSelectionStart &&
-                    !isSelectionEnd &&
-                    styles.todayDay,
-                  (isSelectionStart || isSelectionEnd) &&
-                    [
-                      styles.selectedDay,
-                      { backgroundColor: selectionColor },
-                    ],
-                ]}
-              >
-                {day}
-              </Text>
+              <View style={styles.daySlot}>
+                <Text
+                  style={[
+                    styles.day,
+                    weekEnd && { color: '#2563EB' },
+                    (weekStart || holiday) && { color: colors.danger },
+                    key === today() &&
+                      !isSelectionStart &&
+                      !isSelectionEnd &&
+                      styles.todayDay,
+                    (isSelectionStart || isSelectionEnd) &&
+                      [
+                        styles.selectedDay,
+                        { backgroundColor: selectionColor },
+                      ],
+                  ]}
+                >
+                  {day}
+                </Text>
+              </View>
 
               <View style={styles.holidaySlot}>
                 {holiday ? (
@@ -162,16 +223,14 @@ export function MonthCalendar({
               </View>
 
               <View style={styles.lanes}>
-                {visibleSchedules.map((schedule) => {
-                  const active = isDateInRange(
-                    key,
-                    schedule.startDate,
-                    schedule.endDate,
+                {visibleScheduleLanes.map((lane) => {
+                  const schedule = lane.schedules.find((item) =>
+                    isScheduleActiveOnDate(item, key),
                   );
-                  if (!active) {
+                  if (!schedule) {
                     return (
                       <View
-                        key={`${schedule.id}-empty`}
+                        key={`${lane.key}-empty`}
                         style={styles.emptyBar}
                       />
                     );
@@ -184,14 +243,16 @@ export function MonthCalendar({
                   const startsHere =
                     key === schedule.startDate ||
                     weekStart ||
-                    continuesFromPreviousMonth;
+                    continuesFromPreviousMonth ||
+                    !isScheduleActiveOnDate(schedule, moveDate(key, -1));
                   const endsHere =
                     key === schedule.endDate ||
                     weekEnd ||
-                    continuesToNextMonth;
+                    continuesToNextMonth ||
+                    !isScheduleActiveOnDate(schedule, moveDate(key, 1));
                   return (
                     <Pressable
-                      key={schedule.id}
+                      key={`${lane.key}-${schedule.id}`}
                       disabled={!onSelectSchedule}
                       onPress={(event) => {
                         event.stopPropagation();
@@ -200,7 +261,9 @@ export function MonthCalendar({
                       style={[
                         styles.bar,
                         {
-                          backgroundColor: getScheduleColor(schedule.id),
+                          backgroundColor: getScheduleColor(
+                            schedule.workerId ?? schedule.id,
+                          ),
                           marginLeft: startsHere ? 3 : 0,
                           marginRight: endsHere ? 3 : 0,
                           borderTopLeftRadius: startsHere ? 4 : 0,
@@ -229,9 +292,9 @@ export function MonthCalendar({
         })}
       </View>
 
-      {visibleSchedules.length === 3 && schedules.length > 3 ? (
+      {visibleScheduleLanes.length === 3 && scheduleLanes.length > 3 ? (
         <Text style={styles.more}>
-          겹치는 일정 중 3개까지 달력에 표시됩니다.
+          작업자 일정 중 3개 라인까지 달력에 표시됩니다.
         </Text>
       ) : null}
     </View>
@@ -278,7 +341,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: 6,
   },
-  day: { fontSize: 13, color: colors.ink, marginBottom: 4 },
+  disabledCell: { opacity: 0.45 },
+  daySlot: {
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  day: { fontSize: 13, lineHeight: 18, color: colors.ink },
   todayDay: {
     backgroundColor: '#FFEDD5',
     color: '#C2410C',
