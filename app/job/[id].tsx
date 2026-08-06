@@ -67,6 +67,7 @@ export default function JobDetail() {
   const [assignmentWorkerOrder, setAssignmentWorkerOrder] = useState<
     string[]
   >([]);
+  const [assignmentError, setAssignmentError] = useState('');
   const [selectedScheduleWorkerId, setSelectedScheduleWorkerId] = useState<
     string | null
   >(null);
@@ -330,11 +331,34 @@ export default function JobDetail() {
   };
 
   const saveAssignments = async () => {
+    const blockedSchedule = jobSchedules.find(
+      (schedule) =>
+        !!schedule.workerId &&
+        job.workerIds.includes(schedule.workerId) &&
+        !selectedWorkers.includes(schedule.workerId) &&
+        schedule.endDate >= today(),
+    );
+    if (blockedSchedule) {
+      const worker = users.find(
+        (user) => user.id === blockedSchedule.workerId,
+      );
+      const message = `${worker?.name ?? '선택한 작업자'}에게 ${formatDate(
+        blockedSchedule.startDate,
+      )} ~ ${formatDate(
+        blockedSchedule.endDate,
+      )} 일정이 남아 있어 배정에서 제외할 수 없습니다.`;
+      setAssignmentError(message);
+      Alert.alert('배정 제외 불가', message);
+      return;
+    }
+
     const error = await setJobWorkers(job.id, selectedWorkers);
     if (error) {
+      setAssignmentError(error);
       Alert.alert('배정 실패', error);
       return;
     }
+    setAssignmentError('');
     setAssignOpen(false);
   };
 
@@ -351,7 +375,36 @@ export default function JobDetail() {
 
     setSelectedWorkers(job.workerIds);
     setAssignmentWorkerOrder(orderedWorkerIds);
+    setAssignmentError('');
     setAssignOpen(true);
+  };
+
+  const toggleAssignment = (workerId: string) => {
+    const selected = selectedWorkers.includes(workerId);
+    if (selected) {
+      const blockedSchedule = jobSchedules.find(
+        (schedule) =>
+          schedule.workerId === workerId && schedule.endDate >= today(),
+      );
+      if (blockedSchedule) {
+        const worker = users.find((user) => user.id === workerId);
+        const message = `${worker?.name ?? '선택한 작업자'}에게 ${formatDate(
+          blockedSchedule.startDate,
+        )} ~ ${formatDate(
+          blockedSchedule.endDate,
+        )} 일정이 남아 있어 배정에서 제외할 수 없습니다.`;
+        setAssignmentError(message);
+        Alert.alert('배정 제외 불가', message);
+        return;
+      }
+    }
+
+    setAssignmentError('');
+    setSelectedWorkers(
+      selected
+        ? selectedWorkers.filter((id) => id !== workerId)
+        : [...selectedWorkers, workerId],
+    );
   };
 
   const confirmDeleteSchedule = (scheduleId: string) => {
@@ -807,12 +860,20 @@ export default function JobDetail() {
         visible={assignOpen}
         animationType="slide"
         presentationStyle="pageSheet"
-        onRequestClose={() => setAssignOpen(false)}
+        onRequestClose={() => {
+          setAssignmentError('');
+          setAssignOpen(false);
+        }}
       >
         <ScrollView style={ui.screen} contentContainerStyle={ui.content}>
           <View style={[ui.row, { justifyContent: 'space-between' }]}>
             <Text style={ui.title}>작업자 배정</Text>
-            <Pressable onPress={() => setAssignOpen(false)}>
+            <Pressable
+              onPress={() => {
+                setAssignmentError('');
+                setAssignOpen(false);
+              }}
+            >
               <Text style={styles.close}>닫기</Text>
             </Pressable>
           </View>
@@ -839,13 +900,7 @@ export default function JobDetail() {
               return (
                 <Pressable
                   key={worker.id}
-                  onPress={() =>
-                    setSelectedWorkers(
-                      selected
-                        ? selectedWorkers.filter((id) => id !== worker.id)
-                        : [...selectedWorkers, worker.id],
-                    )
-                  }
+                  onPress={() => toggleAssignment(worker.id)}
                 >
                   <Card
                     style={[
@@ -878,6 +933,12 @@ export default function JobDetail() {
                 </Pressable>
               );
             })}
+          {assignmentError ? (
+            <View style={styles.assignmentError}>
+              <Text style={styles.assignmentErrorTitle}>배정 제외 불가</Text>
+              <Text style={styles.assignmentErrorText}>{assignmentError}</Text>
+            </View>
+          ) : null}
           <Button title="선택한 작업자 배정" onPress={saveAssignments} />
         </ScrollView>
       </Modal>
@@ -1091,4 +1152,18 @@ const styles = StyleSheet.create({
   },
   workerWorkTypeName: { fontSize: 16, fontWeight: '900' },
   workerName: { color: colors.ink, fontWeight: '700', fontSize: 16 },
+  assignmentError: {
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 12,
+    backgroundColor: '#FEF2F2',
+    padding: 12,
+    gap: 4,
+  },
+  assignmentErrorTitle: {
+    color: colors.danger,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  assignmentErrorText: { color: '#991B1B', fontSize: 13, lineHeight: 18 },
 });

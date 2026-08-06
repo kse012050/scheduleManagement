@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { loginIdToEmail, normalizeLoginId, supabase } from '@/lib/supabase';
+import { today } from '@/lib/date';
 import { isKoreanNonWorkingDay } from '@/lib/koreanHolidays';
 import { Job, Role, Schedule, User, WorkType } from '@/types';
 
@@ -754,17 +755,49 @@ export function AppProvider({ children }: React.PropsWithChildren) {
           return '관리자만 작업자를 배정할 수 있습니다.';
         }
 
-        const { error: deleteError } = await supabase
-          .from('job_assignments')
-          .delete()
-          .eq('job_id', jobId);
-        if (deleteError) return '기존 작업자 배정을 변경하지 못했습니다.';
+        const targetJob = jobs.find((job) => job.id === jobId);
+        if (!targetJob) return '작업을 찾을 수 없습니다.';
 
-        if (workerIds.length) {
+        const uniqueWorkerIds = [...new Set(workerIds)];
+        const removedWorkerIds = targetJob.workerIds.filter(
+          (workerId) => !uniqueWorkerIds.includes(workerId),
+        );
+        const addedWorkerIds = uniqueWorkerIds.filter(
+          (workerId) => !targetJob.workerIds.includes(workerId),
+        );
+        const blockedSchedule = schedules.find(
+          (schedule) =>
+            schedule.jobId === jobId &&
+            !!schedule.workerId &&
+            removedWorkerIds.includes(schedule.workerId) &&
+            schedule.endDate >= today(),
+        );
+        if (blockedSchedule) {
+          const worker = users.find(
+            (user) => user.id === blockedSchedule.workerId,
+          );
+          return `${worker?.name ?? '선택한 작업자'}에게 아직 끝나지 않은 일정이 있어 배정에서 제외할 수 없습니다.`;
+        }
+
+        if (removedWorkerIds.length) {
+          const { error: deleteError } = await supabase
+            .from('job_assignments')
+            .delete()
+            .eq('job_id', jobId)
+            .in('worker_id', removedWorkerIds);
+          if (deleteError) {
+            if (deleteError.message.includes('WORKER_HAS_OPEN_SCHEDULE')) {
+              return '아직 끝나지 않은 일정이 있는 작업자는 배정에서 제외할 수 없습니다.';
+            }
+            return '기존 작업자 배정을 변경하지 못했습니다.';
+          }
+        }
+
+        if (addedWorkerIds.length) {
           const { error: insertError } = await supabase
             .from('job_assignments')
             .insert(
-              workerIds.map((workerId) => ({
+              addedWorkerIds.map((workerId) => ({
                 job_id: jobId,
                 worker_id: workerId,
                 assigned_by: currentUser.id,
