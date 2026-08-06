@@ -64,6 +64,9 @@ export default function JobDetail() {
     null,
   );
   const [assignOpen, setAssignOpen] = useState(false);
+  const [assignmentWorkerOrder, setAssignmentWorkerOrder] = useState<
+    string[]
+  >([]);
   const [selectedScheduleWorkerId, setSelectedScheduleWorkerId] = useState<
     string | null
   >(null);
@@ -335,6 +338,22 @@ export default function JobDetail() {
     setAssignOpen(false);
   };
 
+  const openAssignments = () => {
+    const initiallySelected = new Set(job.workerIds);
+    const orderedWorkerIds = users
+      .filter((user) => user.role === 'worker' && user.active)
+      .sort(
+        (a, b) =>
+          Number(initiallySelected.has(a.id)) -
+          Number(initiallySelected.has(b.id)),
+      )
+      .map((worker) => worker.id);
+
+    setSelectedWorkers(job.workerIds);
+    setAssignmentWorkerOrder(orderedWorkerIds);
+    setAssignOpen(true);
+  };
+
   const confirmDeleteSchedule = (scheduleId: string) => {
     setDeleteError('');
     setDeleteScheduleId(scheduleId);
@@ -453,10 +472,7 @@ export default function JobDetail() {
             <Button
               title="작업자 배정"
               kind="secondary"
-              onPress={() => {
-                setSelectedWorkers(job.workerIds);
-                setAssignOpen(true);
-              }}
+              onPress={openAssignments}
             />
           ) : null}
         </Card>
@@ -805,6 +821,16 @@ export default function JobDetail() {
           </Text>
           {users
             .filter((user) => user.role === 'worker' && user.active)
+            .sort(
+              (a, b) => {
+                const aIndex = assignmentWorkerOrder.indexOf(a.id);
+                const bIndex = assignmentWorkerOrder.indexOf(b.id);
+                return (
+                  (aIndex === -1 ? Number.MAX_SAFE_INTEGER : aIndex) -
+                  (bIndex === -1 ? Number.MAX_SAFE_INTEGER : bIndex)
+                );
+              },
+            )
             .map((worker) => {
               const selected = selectedWorkers.includes(worker.id);
               const workType = workTypes.find(
