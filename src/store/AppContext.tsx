@@ -4,6 +4,7 @@ import { Job, Role, Schedule, User, WorkType } from '@/types';
 
 const LOGIN_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{2,31}$/;
 const PHONE_PATTERN = /^01[016789][0-9]{7,8}$/;
+const CUSTOMER_PHONE_PATTERN = /^0[0-9]{8,10}$/;
 
 type ProfileRow = {
   id: string;
@@ -31,6 +32,8 @@ type JobRow = {
   title: string;
   description: string;
   location: string;
+  customer_phone: string;
+  entry_password: string;
   created_by: string;
   created_at: string;
 };
@@ -76,10 +79,22 @@ type ContextValue = {
   resetWorkerPassword: (
     workerId: string,
   ) => Promise<{ temporaryPassword: string | null; error: string | null }>;
-  addJob: (input: { title: string; description: string; location: string }) => Promise<string | null>;
+  addJob: (input: {
+    title: string;
+    description: string;
+    location: string;
+    customerPhone: string;
+    entryPassword: string;
+  }) => Promise<string | null>;
   updateJob: (
     jobId: string,
-    input: { title: string; description: string; location: string },
+    input: {
+      title: string;
+      description: string;
+      location: string;
+      customerPhone: string;
+      entryPassword: string;
+    },
   ) => Promise<string | null>;
   setJobWorkers: (jobId: string, workerIds: string[]) => Promise<string | null>;
   addSchedule: (input: Omit<Schedule, 'id' | 'createdAt' | 'createdBy'>) => Promise<string | null>;
@@ -177,7 +192,9 @@ export function AppProvider({ children }: React.PropsWithChildren) {
     const [jobsResult, assignmentsResult, schedulesResult] = await Promise.all([
       supabase
         .from('jobs')
-        .select('id, title, description, location, created_by, created_at')
+        .select(
+          'id, title, description, location, customer_phone, entry_password, created_by, created_at',
+        )
         .order('created_at', { ascending: false }),
       supabase
         .from('job_assignments')
@@ -203,6 +220,8 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         title: job.title,
         description: job.description,
         location: job.location,
+        customerPhone: job.customer_phone,
+        entryPassword: job.entry_password,
         workerIds: assignmentRows
           .filter((assignment) => assignment.job_id === job.id)
           .map((assignment) => assignment.worker_id),
@@ -577,12 +596,24 @@ export function AppProvider({ children }: React.PropsWithChildren) {
         return { temporaryPassword, error: null };
       },
       addJob: async (input) => {
-        if (!currentUser) return '로그인이 필요합니다.';
+        if (!currentUser || currentUser.role !== 'admin') {
+          return '관리자만 작업을 등록할 수 있습니다.';
+        }
+
+        const customerPhone = input.customerPhone.replace(/[^0-9]/g, '');
+        if (customerPhone && !CUSTOMER_PHONE_PATTERN.test(customerPhone)) {
+          return '고객 전화번호를 올바르게 입력해주세요.';
+        }
+        if (input.entryPassword.length > 50) {
+          return '현장 출입 비밀번호는 50자 이하로 입력해주세요.';
+        }
 
         const { error } = await supabase.from('jobs').insert({
           title: input.title.trim(),
           description: input.description.trim(),
           location: input.location.trim(),
+          customer_phone: customerPhone,
+          entry_password: input.entryPassword.trim(),
           created_by: currentUser.id,
         });
         if (error) return '작업을 등록하지 못했습니다.';
@@ -592,15 +623,16 @@ export function AppProvider({ children }: React.PropsWithChildren) {
       },
       updateJob: async (jobId, input) => {
         const target = jobs.find((job) => job.id === jobId);
-        if (
-          !currentUser ||
-          !target ||
-          !(
-            currentUser.role === 'admin' ||
-            target.createdBy === currentUser.id
-          )
-        ) {
-          return '이 작업을 수정할 권한이 없습니다.';
+        if (!currentUser || currentUser.role !== 'admin' || !target) {
+          return '관리자만 작업을 수정할 수 있습니다.';
+        }
+
+        const customerPhone = input.customerPhone.replace(/[^0-9]/g, '');
+        if (customerPhone && !CUSTOMER_PHONE_PATTERN.test(customerPhone)) {
+          return '고객 전화번호를 올바르게 입력해주세요.';
+        }
+        if (input.entryPassword.length > 50) {
+          return '현장 출입 비밀번호는 50자 이하로 입력해주세요.';
         }
 
         const { error } = await supabase
@@ -609,6 +641,8 @@ export function AppProvider({ children }: React.PropsWithChildren) {
             title: input.title.trim(),
             description: input.description.trim(),
             location: input.location.trim(),
+            customer_phone: customerPhone,
+            entry_password: input.entryPassword.trim(),
           })
           .eq('id', jobId);
         if (error) return '작업을 수정하지 못했습니다.';

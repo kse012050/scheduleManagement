@@ -19,11 +19,14 @@ export default function Jobs() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [entryPassword, setEntryPassword] = useState('');
 
   if (!currentUser) return null;
 
+  const isAdmin = currentUser.role === 'admin';
   const visible =
-    currentUser.role === 'admin'
+    isAdmin
       ? jobs
       : jobs.filter(
           (job) =>
@@ -41,6 +44,8 @@ export default function Jobs() {
       title: title.trim(),
       description: description.trim(),
       location: location.trim(),
+      customerPhone,
+      entryPassword,
     });
     if (error) {
       Alert.alert('등록 실패', error);
@@ -50,6 +55,8 @@ export default function Jobs() {
     setTitle('');
     setDescription('');
     setLocation('');
+    setCustomerPhone('');
+    setEntryPassword('');
     setOpen(false);
   };
 
@@ -61,9 +68,11 @@ export default function Jobs() {
             <Text style={ui.title}>작업</Text>
             <Text style={ui.subtitle}>{visible.length}개의 작업</Text>
           </View>
-          <Pressable onPress={() => setOpen(true)} style={styles.add}>
-            <Text style={styles.addText}>＋ 등록</Text>
-          </Pressable>
+          {isAdmin ? (
+            <Pressable onPress={() => setOpen(true)} style={styles.add}>
+              <Text style={styles.addText}>＋ 등록</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         {visible.length ? (
@@ -102,13 +111,17 @@ export default function Jobs() {
         ) : (
           <Empty
             title="등록된 작업이 없습니다"
-            detail="첫 작업을 등록해주세요."
+            detail={
+              isAdmin
+                ? '첫 작업을 등록해주세요.'
+                : '현재 배정된 작업이 없습니다.'
+            }
           />
         )}
       </ScrollView>
 
       <Modal
-        visible={open}
+        visible={isAdmin && open}
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={() => setOpen(false)}
@@ -132,6 +145,23 @@ export default function Jobs() {
               value={location}
               onChangeText={setLocation}
               placeholder="주소 또는 장소"
+            />
+            <Field
+              label="고객 전화번호"
+              value={customerPhone}
+              onChangeText={(value) =>
+                setCustomerPhone(value.replace(/[^0-9]/g, '').slice(0, 11))
+              }
+              keyboardType="phone-pad"
+              maxLength={11}
+              placeholder="숫자만 입력"
+            />
+            <Field
+              label="현장 출입 비밀번호"
+              value={entryPassword}
+              onChangeText={setEntryPassword}
+              maxLength={50}
+              placeholder="현관 또는 공동현관 비밀번호"
             />
             <Field
               label="작업 설명"

@@ -26,6 +26,8 @@ export type Job = {
   title: string;
   description: string;
   location: string;
+  customerPhone: string;
+  entryPassword: string;
   workerIds: string[];
   createdAt: string;
   createdBy: string;

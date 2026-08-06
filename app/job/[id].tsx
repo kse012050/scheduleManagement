@@ -19,6 +19,16 @@ import { formatDate, today, validDate } from '@/lib/date';
 import { useApp } from '@/store/AppContext';
 import { Schedule } from '@/types';
 
+const formatPhone = (value: string) => {
+  if (value.length === 11) {
+    return `${value.slice(0, 3)}-${value.slice(3, 7)}-${value.slice(7)}`;
+  }
+  if (value.length === 10) {
+    return `${value.slice(0, 3)}-${value.slice(3, 6)}-${value.slice(6)}`;
+  }
+  return value;
+};
+
 export default function JobDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
@@ -50,6 +60,12 @@ export default function JobDetail() {
   const [editDescription, setEditDescription] = useState(
     job?.description ?? '',
   );
+  const [editCustomerPhone, setEditCustomerPhone] = useState(
+    job?.customerPhone ?? '',
+  );
+  const [editEntryPassword, setEditEntryPassword] = useState(
+    job?.entryPassword ?? '',
+  );
   const [selectedWorkers, setSelectedWorkers] = useState<string[]>(
     job?.workerIds ?? [],
   );
@@ -67,10 +83,7 @@ export default function JobDetail() {
     (currentUser.role === 'admin' ||
       job.createdBy === currentUser.id ||
       job.workerIds.includes(currentUser.id));
-  const canManageJob =
-    !!job &&
-    !!currentUser &&
-    (currentUser.role === 'admin' || job.createdBy === currentUser.id);
+  const canManageJob = !!job && currentUser?.role === 'admin';
 
   if (!job || !currentUser || !canViewJob) {
     return (
@@ -128,6 +141,8 @@ export default function JobDetail() {
     setEditTitle(job.title);
     setEditLocation(job.location);
     setEditDescription(job.description);
+    setEditCustomerPhone(job.customerPhone);
+    setEditEntryPassword(job.entryPassword);
     setEditOpen(true);
   };
 
@@ -141,6 +156,8 @@ export default function JobDetail() {
       title: editTitle.trim(),
       location: editLocation.trim(),
       description: editDescription.trim(),
+      customerPhone: editCustomerPhone,
+      entryPassword: editEntryPassword,
     });
     if (error) {
       Alert.alert('수정 실패', error);
@@ -230,6 +247,26 @@ export default function JobDetail() {
           ) : null}
           {job.description ? (
             <Text style={styles.description}>{job.description}</Text>
+          ) : null}
+          {job.customerPhone || job.entryPassword ? (
+            <View style={styles.accessInfo}>
+              {job.customerPhone ? (
+                <View style={styles.accessRow}>
+                  <Text style={styles.accessLabel}>고객 전화번호</Text>
+                  <Text selectable style={styles.accessValue}>
+                    {formatPhone(job.customerPhone)}
+                  </Text>
+                </View>
+              ) : null}
+              {job.entryPassword ? (
+                <View style={styles.accessRow}>
+                  <Text style={styles.accessLabel}>현장 출입 비밀번호</Text>
+                  <Text selectable style={styles.accessValue}>
+                    {job.entryPassword}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
           ) : null}
           <View style={styles.people}>
             <Text style={styles.peopleLabel}>배정 작업자</Text>
@@ -334,6 +371,25 @@ export default function JobDetail() {
               value={editLocation}
               onChangeText={setEditLocation}
               placeholder="주소 또는 장소"
+            />
+            <Field
+              label="고객 전화번호"
+              value={editCustomerPhone}
+              onChangeText={(value) =>
+                setEditCustomerPhone(
+                  value.replace(/[^0-9]/g, '').slice(0, 11),
+                )
+              }
+              keyboardType="phone-pad"
+              maxLength={11}
+              placeholder="숫자만 입력"
+            />
+            <Field
+              label="현장 출입 비밀번호"
+              value={editEntryPassword}
+              onChangeText={setEditEntryPassword}
+              maxLength={50}
+              placeholder="현관 또는 공동현관 비밀번호"
             />
             <Field
               label="작업 설명"
@@ -489,6 +545,15 @@ const styles = StyleSheet.create({
   },
   meta: { color: colors.muted },
   description: { color: '#475467', lineHeight: 21 },
+  accessInfo: {
+    backgroundColor: '#FFF8E7',
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+  },
+  accessRow: { gap: 4 },
+  accessLabel: { color: colors.muted, fontSize: 12 },
+  accessValue: { color: colors.ink, fontWeight: '700' },
   people: {
     backgroundColor: colors.background,
     borderRadius: 12,
