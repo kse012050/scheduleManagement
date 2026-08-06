@@ -35,6 +35,7 @@ export default function JobDetail() {
     currentUser,
     jobs,
     users,
+    workTypes,
     schedules,
     updateJob,
     setJobWorkers,
@@ -270,12 +271,39 @@ export default function JobDetail() {
           ) : null}
           <View style={styles.people}>
             <Text style={styles.peopleLabel}>배정 작업자</Text>
-            <Text style={styles.peopleValue}>
-              {job.workerIds
-                .map((userId) => users.find((user) => user.id === userId)?.name)
-                .filter(Boolean)
-                .join(', ') || '없음'}
-            </Text>
+            {job.workerIds.length ? (
+              <View style={styles.assignedWorkerList}>
+                {job.workerIds.map((userId) => {
+                  const worker = users.find((user) => user.id === userId);
+                  if (!worker) return null;
+                  const workType = workTypes.find(
+                    (item) => item.id === worker.workTypeId,
+                  );
+                  const workTypeColor = workType?.colorHex ?? colors.muted;
+
+                  return (
+                    <View
+                      key={worker.id}
+                      style={styles.assignedWorker}
+                    >
+                      <Text
+                        style={[
+                          styles.assignedWorkTypeText,
+                          { color: workTypeColor },
+                        ]}
+                      >
+                        {workType?.name ?? '미지정'}
+                      </Text>
+                      <Text style={styles.assignedWorkerName}>
+                        {worker.name}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : (
+              <Text style={styles.peopleValue}>없음</Text>
+            )}
           </View>
           {canManageJob ? (
             <Button
@@ -493,6 +521,9 @@ export default function JobDetail() {
             .filter((user) => user.role === 'worker' && user.active)
             .map((worker) => {
               const selected = selectedWorkers.includes(worker.id);
+              const workType = workTypes.find(
+                (item) => item.id === worker.workTypeId,
+              );
               return (
                 <Pressable
                   key={worker.id}
@@ -520,9 +551,16 @@ export default function JobDetail() {
                         {selected ? '✓' : ''}
                       </Text>
                     </View>
-                    <View>
+                    <View style={styles.workerInfo}>
+                      <Text
+                        style={[
+                          styles.workerWorkTypeName,
+                          { color: workType?.colorHex ?? colors.muted },
+                        ]}
+                      >
+                        {workType?.name ?? '미지정'}
+                      </Text>
                       <Text style={styles.workerName}>{worker.name}</Text>
-                      <Text style={styles.owner}>@{worker.loginId}</Text>
                     </View>
                   </Card>
                 </Pressable>
@@ -562,6 +600,20 @@ const styles = StyleSheet.create({
   },
   peopleLabel: { color: colors.muted, fontSize: 12 },
   peopleValue: { color: colors.ink, fontWeight: '600' },
+  assignedWorkerList: { gap: 8, marginTop: 2 },
+  assignedWorker: {
+    minHeight: 40,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  assignedWorkerName: { color: colors.ink, fontWeight: '700' },
+  assignedWorkTypeText: { fontSize: 13, fontWeight: '800' },
   add: {
     backgroundColor: colors.primary,
     borderRadius: 11,
@@ -613,5 +665,13 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   checkText: { color: '#fff', fontWeight: '900' },
+  workerInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
+  workerWorkTypeName: { fontSize: 16, fontWeight: '900' },
   workerName: { color: colors.ink, fontWeight: '700', fontSize: 16 },
 });
