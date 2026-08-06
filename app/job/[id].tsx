@@ -148,6 +148,12 @@ export default function JobDetail() {
 
   const saveSchedule = async () => {
     setScheduleError('');
+    if (!editingScheduleId && currentUser.role !== 'admin') {
+      const message = '관리자만 일정을 등록할 수 있습니다.';
+      setScheduleError(message);
+      Alert.alert('등록 권한 없음', message);
+      return;
+    }
     if (
       !selectedScheduleWorkerId ||
       !selectableScheduleWorkers.some(
@@ -532,16 +538,20 @@ export default function JobDetail() {
 
         <View style={[ui.row, { justifyContent: 'space-between' }]}>
           <Text style={ui.sectionTitle}>작업 달력</Text>
-          <Pressable
-            onPress={() => openForDate(today())}
-            style={styles.add}
-          >
-            <Text style={styles.addText}>＋ 일정 등록</Text>
-          </Pressable>
+          {currentUser.role === 'admin' ? (
+            <Pressable
+              onPress={() => openForDate(today())}
+              style={styles.add}
+            >
+              <Text style={styles.addText}>＋ 일정 등록</Text>
+            </Pressable>
+          ) : null}
         </View>
         <MonthCalendar
           schedules={jobSchedules}
-          onSelectDate={openForDate}
+          onSelectDate={
+            currentUser.role === 'admin' ? openForDate : undefined
+          }
           onSelectSchedule={openForSchedule}
         />
 

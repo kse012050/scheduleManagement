@@ -41,7 +41,7 @@ const isScheduleActiveOnDate = (schedule: Schedule, value: string) =>
 
 type MonthCalendarProps = {
   schedules: Schedule[];
-  onSelectDate: (date: string) => void;
+  onSelectDate?: (date: string) => void;
   onSelectSchedule?: (schedule: Schedule) => void;
   selectedStartDate?: string;
   selectedEndDate?: string;
@@ -184,7 +184,7 @@ export function MonthCalendar({
             <Pressable
               key={key}
               disabled={dateDisabled}
-              onPress={() => onSelectDate(key)}
+              onPress={() => onSelectDate?.(key)}
               style={[
                 styles.cell,
                 dateDisabled && styles.disabledCell,

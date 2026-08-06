@@ -814,6 +814,9 @@ export function AppProvider({ children }: React.PropsWithChildren) {
       },
       addSchedule: async (input) => {
         if (!currentUser) return '로그인이 필요합니다.';
+        if (currentUser.role !== 'admin') {
+          return '관리자만 일정을 등록할 수 있습니다.';
+        }
 
         const targetJob = jobs.find((job) => job.id === input.jobId);
         const scheduleWorker = users.find(
