@@ -43,6 +43,7 @@ type MonthCalendarProps = {
   schedules: Schedule[];
   onSelectDate?: (date: string) => void;
   onSelectSchedule?: (schedule: Schedule) => void;
+  scheduleColor?: (schedule: Schedule) => string;
   selectedStartDate?: string;
   selectedEndDate?: string;
   selectionColor?: string;
@@ -55,6 +56,7 @@ export function MonthCalendar({
   schedules,
   onSelectDate,
   onSelectSchedule,
+  scheduleColor,
   selectedStartDate,
   selectedEndDate,
   selectionColor = colors.primary,
@@ -261,9 +263,11 @@ export function MonthCalendar({
                       style={[
                         styles.bar,
                         {
-                          backgroundColor: getScheduleColor(
-                            schedule.workerId ?? schedule.id,
-                          ),
+                          backgroundColor:
+                            scheduleColor?.(schedule) ??
+                            getScheduleColor(
+                              schedule.workerId ?? schedule.id,
+                            ),
                           marginLeft: startsHere ? 3 : 0,
                           marginRight: endsHere ? 3 : 0,
                           borderTopLeftRadius: startsHere ? 4 : 0,

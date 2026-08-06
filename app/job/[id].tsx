@@ -100,6 +100,25 @@ export default function JobDetail() {
         .sort((a, b) => a.startDate.localeCompare(b.startDate)),
     [schedules, id],
   );
+  const workerScheduleColor = (
+    workerId?: string | null,
+    scheduleTitle?: string,
+  ) => {
+    const worker = workerId
+      ? users.find((user) => user.id === workerId)
+      : undefined;
+    const workType =
+      workTypes.find((item) => item.id === worker?.workTypeId) ??
+      workTypes.find(
+        (item) =>
+          scheduleTitle === item.name ||
+          scheduleTitle?.startsWith(`${item.name} `),
+      );
+    return (
+      workType?.colorHex ??
+      (workerId ? getScheduleColor(workerId) : colors.primary)
+    );
+  };
 
   const canViewJob =
     !!job &&
@@ -446,7 +465,9 @@ export default function JobDetail() {
         <Card style={styles.hero}>
           <View style={[ui.row, { justifyContent: 'space-between' }]}>
             <Text style={styles.jobTitle}>{job.title}</Text>
-            <Text style={ui.badge}>{job.workerIds.length}명</Text>
+            {currentUser.role === 'admin' ? (
+              <Text style={ui.badge}>{job.workerIds.length}명</Text>
+            ) : null}
           </View>
           {job.description ? (
             <Text style={styles.description}>{job.description}</Text>
@@ -491,42 +512,45 @@ export default function JobDetail() {
               ) : null}
             </View>
           ) : null}
-          <View style={styles.people}>
-            <Text style={styles.peopleLabel}>배정 작업자</Text>
-            {job.workerIds.length ? (
-              <View style={styles.assignedWorkerList}>
-                {job.workerIds.map((userId) => {
-                  const worker = users.find((user) => user.id === userId);
-                  if (!worker) return null;
-                  const workType = workTypes.find(
-                    (item) => item.id === worker.workTypeId,
-                  );
-                  const workTypeColor = workType?.colorHex ?? colors.muted;
+          {currentUser.role === 'admin' ? (
+            <View style={styles.people}>
+              <Text style={styles.peopleLabel}>배정 작업자</Text>
+              {job.workerIds.length ? (
+                <View style={styles.assignedWorkerList}>
+                  {job.workerIds.map((userId) => {
+                    const worker = users.find((user) => user.id === userId);
+                    if (!worker) return null;
+                    const workType = workTypes.find(
+                      (item) => item.id === worker.workTypeId,
+                    );
+                    const workTypeColor =
+                      workType?.colorHex ?? colors.muted;
 
-                  return (
-                    <View
-                      key={worker.id}
-                      style={styles.assignedWorker}
-                    >
-                      <Text
-                        style={[
-                          styles.assignedWorkTypeText,
-                          { color: workTypeColor },
-                        ]}
+                    return (
+                      <View
+                        key={worker.id}
+                        style={styles.assignedWorker}
                       >
-                        {workType?.name ?? '미지정'}
-                      </Text>
-                      <Text style={styles.assignedWorkerName}>
-                        {worker.name}
-                      </Text>
-                    </View>
-                  );
-                })}
-              </View>
-            ) : (
-              <Text style={styles.peopleValue}>없음</Text>
-            )}
-          </View>
+                        <Text
+                          style={[
+                            styles.assignedWorkTypeText,
+                            { color: workTypeColor },
+                          ]}
+                        >
+                          {workType?.name ?? '미지정'}
+                        </Text>
+                        <Text style={styles.assignedWorkerName}>
+                          {worker.name}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Text style={styles.peopleValue}>없음</Text>
+              )}
+            </View>
+          ) : null}
           {currentUser.role === 'admin' ? (
             <Button
               title="작업자 배정"
@@ -553,6 +577,9 @@ export default function JobDetail() {
             currentUser.role === 'admin' ? openForDate : undefined
           }
           onSelectSchedule={openForSchedule}
+          scheduleColor={(schedule) =>
+            workerScheduleColor(schedule.workerId, schedule.title)
+          }
         />
 
         <Text style={ui.sectionTitle}>등록된 일정</Text>
@@ -792,7 +819,7 @@ export default function JobDetail() {
               enableNonWorkingDateExceptions={!selectingEndDate}
               selectionColor={
                 selectedScheduleWorkerId
-                  ? getScheduleColor(selectedScheduleWorkerId)
+                  ? workerScheduleColor(selectedScheduleWorkerId)
                   : undefined
               }
             />
