@@ -580,6 +580,9 @@ export default function JobDetail() {
           scheduleColor={(schedule) =>
             workerScheduleColor(schedule.workerId, schedule.title)
           }
+          highlightedWorkerId={
+            currentUser.role === 'worker' ? currentUser.id : undefined
+          }
         />
 
         <Text style={ui.sectionTitle}>등록된 일정</Text>

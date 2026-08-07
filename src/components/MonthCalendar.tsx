@@ -44,6 +44,7 @@ type MonthCalendarProps = {
   onSelectDate?: (date: string) => void;
   onSelectSchedule?: (schedule: Schedule) => void;
   scheduleColor?: (schedule: Schedule) => string;
+  highlightedWorkerId?: string;
   selectedStartDate?: string;
   selectedEndDate?: string;
   selectionColor?: string;
@@ -57,6 +58,7 @@ export function MonthCalendar({
   onSelectDate,
   onSelectSchedule,
   scheduleColor,
+  highlightedWorkerId,
   selectedStartDate,
   selectedEndDate,
   selectionColor = colors.primary,
@@ -252,6 +254,12 @@ export function MonthCalendar({
                     weekEnd ||
                     continuesToNextMonth ||
                     !isScheduleActiveOnDate(schedule, moveDate(key, 1));
+                  const highlighted =
+                    !!highlightedWorkerId &&
+                    schedule.workerId === highlightedWorkerId;
+                  const dimmed =
+                    !!highlightedWorkerId &&
+                    schedule.workerId !== highlightedWorkerId;
                   return (
                     <Pressable
                       key={`${lane.key}-${schedule.id}`}
@@ -274,6 +282,8 @@ export function MonthCalendar({
                           borderBottomLeftRadius: startsHere ? 4 : 0,
                           borderTopRightRadius: endsHere ? 4 : 0,
                           borderBottomRightRadius: endsHere ? 4 : 0,
+                          opacity: dimmed ? 0.38 : 1,
+                          zIndex: highlighted ? 1 : 0,
                         },
                       ]}
                     >
