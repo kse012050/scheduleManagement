@@ -42,7 +42,7 @@ const isScheduleActiveOnDate = (schedule: Schedule, value: string) =>
 type MonthCalendarProps = {
   schedules: Schedule[];
   onSelectDate?: (date: string) => void;
-  onSelectSchedule?: (schedule: Schedule) => void;
+  onSelectSchedule?: (schedule: Schedule, date: string) => void;
   scheduleColor?: (schedule: Schedule) => string;
   highlightedWorkerId?: string;
   selectedStartDate?: string;
@@ -266,7 +266,7 @@ export function MonthCalendar({
                       disabled={!onSelectSchedule}
                       onPress={(event) => {
                         event.stopPropagation();
-                        onSelectSchedule?.(schedule);
+                        onSelectSchedule?.(schedule, key);
                       }}
                       style={[
                         styles.bar,

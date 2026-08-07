@@ -15,6 +15,7 @@ import {
   getScheduleColor,
   MonthCalendar,
 } from '@/components/MonthCalendar';
+import { SchedulePhotoModal } from '@/components/SchedulePhotoModal';
 import { colors } from '@/constants/theme';
 import { formatDate, today, validDate } from '@/lib/date';
 import {
@@ -54,6 +55,9 @@ export default function JobDetail() {
   const job = jobs.find((item) => item.id === id);
   const [editOpen, setEditOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [photoOpen, setPhotoOpen] = useState(false);
+  const [photoSchedule, setPhotoSchedule] = useState<Schedule | null>(null);
+  const [photoDate, setPhotoDate] = useState<string | null>(null);
   const [scheduleError, setScheduleError] = useState('');
   const [deleteScheduleId, setDeleteScheduleId] = useState<string | null>(
     null,
@@ -321,6 +325,19 @@ export default function JobDetail() {
     setScheduleOpen(true);
   };
 
+  const openSchedulePhotos = (schedule: Schedule, date: string) => {
+    if (
+      currentUser.role === 'worker' &&
+      schedule.workerId !== currentUser.id
+    ) {
+      return;
+    }
+
+    setPhotoSchedule(schedule);
+    setPhotoDate(date);
+    setPhotoOpen(true);
+  };
+
   const selectScheduleDate = (date: string) => {
     setScheduleError('');
     if (excludeNonWorkingDays && isKoreanNonWorkingDay(date)) {
@@ -576,7 +593,7 @@ export default function JobDetail() {
           onSelectDate={
             currentUser.role === 'admin' ? openForDate : undefined
           }
-          onSelectSchedule={openForSchedule}
+          onSelectSchedule={openSchedulePhotos}
           scheduleColor={(schedule) =>
             workerScheduleColor(schedule.workerId, schedule.title)
           }
@@ -627,6 +644,22 @@ export default function JobDetail() {
           />
         )}
       </ScrollView>
+
+      <SchedulePhotoModal
+        visible={photoOpen}
+        schedule={photoSchedule}
+        workDate={photoDate}
+        currentUser={currentUser}
+        users={users}
+        onClose={() => {
+          setPhotoOpen(false);
+          setPhotoSchedule(null);
+          setPhotoDate(null);
+        }}
+        onEditSchedule={
+          currentUser.role === 'admin' ? openForSchedule : undefined
+        }
+      />
 
       <Modal
         visible={editOpen}

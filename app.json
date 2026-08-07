@@ -13,6 +13,14 @@
         {
           "contactsPermission": "작업자 정보를 입력하기 위해 연락처 접근을 허용해주세요."
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "작업 사진을 선택하기 위해 사진 보관함 접근을 허용해주세요.",
+          "cameraPermission": "작업 사진을 촬영하기 위해 카메라 접근을 허용해주세요.",
+          "microphonePermission": false
+        }
       ]
     ],
     "experiments": { "typedRoutes": true },
