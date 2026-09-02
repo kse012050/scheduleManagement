@@ -17,7 +17,10 @@
     ],
     "experiments": { "typedRoutes": true },
     "web": { "bundler": "metro" },
-    "android": { "package": "com.schedule.workmanager" },
+    "android": {
+      "package": "com.schedule.workmanager",
+      "softwareKeyboardLayoutMode": "resize"
+    },
     "ios": { "bundleIdentifier": "com.schedule.workmanager" }
   }
 }
