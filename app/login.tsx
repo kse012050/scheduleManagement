@@ -44,7 +44,11 @@ export default function Login() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.screen}
     >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+      <TouchableWithoutFeedback
+        onPress={Keyboard.dismiss}
+        accessible={false}
+        disabled={Platform.OS === 'web'}
+      >
         <ScrollView
           contentContainerStyle={styles.content}
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
